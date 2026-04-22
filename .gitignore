@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Data artifacts (troppo grandi e rigenerabili)
+data/raw/
+data/processed/
+data/manual/
+!data/manual/.gitkeep
+
+# Model artifacts
+models/
+!models/.gitkeep
+
+# Reports (archiviati fuori da git; tracked solo il README della cartella)
+reports/
+!reports/.gitkeep
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Env
+.env
+.env.local
+
+# OS
+Thumbs.db
+
+# Claude Code local state (non condiviso)
+.claude/
