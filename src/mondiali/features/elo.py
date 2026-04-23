@@ -9,10 +9,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-import pandas as pd
 import structlog
 
-from mondiali.config import HOME_ADVANTAGE, K_FACTORS
+from mondiali.config import HOME_ADVANTAGE
 
 log = structlog.get_logger(__name__)
 
@@ -36,3 +35,51 @@ class EloSystem:
     def get(self, team: str) -> float:
         """Rating corrente di `team`; DEFAULT_ELO se mai visto."""
         return self.ratings.get(team, float(DEFAULT_ELO))
+
+    def update(
+        self,
+        *,
+        home: str,
+        away: str,
+        home_goals: int,
+        away_goals: int,
+        k_factor: float,
+        neutral: bool,
+    ) -> tuple[float, float]:
+        """Applica l'update Elo per un singolo match. Zero-sum.
+
+        Formula:
+            expected_home = 1 / (1 + 10^((elo_away - elo_home_adj) / 400))
+            dove elo_home_adj = elo_home + (HOME_ADVANTAGE if not neutral else 0)
+            score_home = 1 if home_goals > away_goals, 0.5 if tie, 0 otherwise
+            delta = k_factor * (score_home - expected_home)
+            elo_home_new = elo_home + delta
+            elo_away_new = elo_away - delta
+
+        Args:
+            home, away: nomi squadre.
+            home_goals, away_goals: gol segnati.
+            k_factor: K per questa partita.
+            neutral: True se venue neutrale (disattiva home advantage).
+
+        Returns:
+            (elo_home_pre, elo_away_pre) — i rating PRIMA dell'update (utile per
+            snapshot per il match stesso, dove serve il pre-match).
+        """
+        elo_h = self.get(home)
+        elo_a = self.get(away)
+
+        adv = 0.0 if neutral else float(HOME_ADVANTAGE)
+        expected_home = 1.0 / (1.0 + 10.0 ** ((elo_a - (elo_h + adv)) / 400.0))
+
+        if home_goals > away_goals:
+            score_home = 1.0
+        elif home_goals < away_goals:
+            score_home = 0.0
+        else:
+            score_home = 0.5
+
+        delta = k_factor * (score_home - expected_home)
+        self.ratings[home] = elo_h + delta
+        self.ratings[away] = elo_a - delta
+        return elo_h, elo_a
