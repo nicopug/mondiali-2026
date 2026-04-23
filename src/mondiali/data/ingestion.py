@@ -41,5 +41,25 @@ def download_international_results(dest: Path, *, force: bool = False) -> Path:
 
 
 def load_international_results(csv_path: Path) -> pd.DataFrame:
-    """Placeholder — implementato in Task 4."""
-    raise NotImplementedError("load_international_results implementato in Task 4")
+    """Carica `results.csv` con schema normalizzato.
+
+    - Parse delle date in `datetime64[ns]`.
+    - Cast `neutral` da stringa 'TRUE'/'FALSE' a bool.
+    - Droppa righe con `home_score` o `away_score` mancanti (match futuri/cancellati).
+    - Ordina per data crescente.
+
+    Args:
+        csv_path: path del CSV scaricato.
+
+    Returns:
+        DataFrame pronto per feature engineering.
+    """
+    df = pd.read_csv(csv_path, dtype={"neutral": "string"})
+    df["date"] = pd.to_datetime(df["date"], errors="raise").astype("datetime64[ns]")
+    df = df.dropna(subset=["home_score", "away_score"]).copy()
+    df["home_score"] = df["home_score"].astype("int64")
+    df["away_score"] = df["away_score"].astype("int64")
+    df["neutral"] = df["neutral"].str.upper().map({"TRUE": True, "FALSE": False}).astype("bool")
+    df = df.sort_values("date", kind="mergesort").reset_index(drop=True)
+    log.info("loaded international_results", rows=len(df))
+    return df
