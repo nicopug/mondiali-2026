@@ -26,15 +26,15 @@ env/
 # Data artifacts (troppo grandi e rigenerabili)
 data/raw/
 data/processed/
-data/manual/
+data/manual/*
 !data/manual/.gitkeep
 
 # Model artifacts
-models/
+models/*
 !models/.gitkeep
 
 # Reports (archiviati fuori da git; tracked solo il README della cartella)
-reports/
+reports/*
 !reports/.gitkeep
 
 # Jupyter

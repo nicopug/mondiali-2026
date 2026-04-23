@@ -1,0 +1,70 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mondiali"
+version = "0.1.0"
+description = "World Cup 2026 prediction system"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "Nicolò" }]
+dependencies = [
+    "xgboost>=2.0",
+    "pandas>=2.0",
+    "numpy>=1.24",
+    "scikit-learn>=1.3",
+    "scipy>=1.11",
+    "optuna>=3.4",
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+    "typer>=0.9",
+    "requests>=2.31",
+    "beautifulsoup4>=4.12",
+    "pyarrow>=14.0",
+    "structlog>=23.2",
+    "shap>=0.44",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+    "pytest-xdist>=3.5",
+    "pytest-cov>=4.1",
+    "ruff>=0.1",
+    "mypy>=1.7",
+    "types-requests",
+    "ipython",
+    "jupyter",
+]
+
+[project.scripts]
+mondiali = "mondiali.cli.main:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mondiali"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "SIM", "RET", "PL"]
+ignore = ["PLR0913", "PLR2004"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["xgboost.*", "shap.*", "optuna.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+addopts = "-ra -q --strict-markers"
