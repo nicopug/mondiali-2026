@@ -7,6 +7,8 @@ import pandas as pd
 import requests
 import structlog
 
+from mondiali.features.elo import EloSystem
+
 log = structlog.get_logger(__name__)
 
 INTERNATIONAL_RESULTS_URL = (
@@ -63,3 +65,39 @@ def load_international_results(csv_path: Path) -> pd.DataFrame:
     df = df.sort_values("date", kind="mergesort").reset_index(drop=True)
     log.info("loaded international_results", rows=len(df))
     return df
+
+
+def build_processed_matches(raw_csv: Path, out_path: Path) -> Path:
+    """Pipeline: raw CSV → matches.parquet con Elo pre-match per riga.
+
+    - Carica il raw
+    - Ordina per data (già fatto da `load_international_results`)
+    - Costruisce `EloSystem.build_history`
+    - Aggiunge `match_id` stabile (derivato da date+home+away)
+    - Scrive `matches.parquet`
+
+    Args:
+        raw_csv: path del CSV scaricato.
+        out_path: dove scrivere il parquet.
+
+    Returns:
+        out_path.
+    """
+    df = load_international_results(raw_csv)
+    elo = EloSystem()
+    df = elo.build_history(df)
+
+    df["match_id"] = (
+        df["date"].dt.strftime("%Y%m%d")
+        + "_"
+        + df["home_team"].str.replace(" ", "_")
+        + "_vs_"
+        + df["away_team"].str.replace(" ", "_")
+    )
+    if not df["match_id"].is_unique:
+        df["match_id"] = df["match_id"] + "_" + df.groupby("match_id").cumcount().astype(str)
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(out_path, index=False)
+    log.info("wrote processed matches", path=str(out_path), rows=len(df))
+    return out_path

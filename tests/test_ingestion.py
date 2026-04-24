@@ -2,10 +2,12 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pandas as pd
 import pytest
 
 from mondiali.data.ingestion import (
     INTERNATIONAL_RESULTS_URL,
+    build_processed_matches,
     download_international_results,
     load_international_results,
 )
@@ -117,3 +119,35 @@ def test_load_sorts_by_date_ascending(tmp_path: Path) -> None:
     df = load_international_results(csv)
 
     assert df.iloc[0]["date"] < df.iloc[1]["date"]
+
+
+def test_build_processed_matches_produces_expected_schema(tmp_path: Path) -> None:
+    """Pipeline ingest → processed produce parquet con schema atteso."""
+    raw_csv = tmp_path / "results.csv"
+    raw_csv.write_text(
+        "date,home_team,away_team,home_score,away_score,tournament,city,country,neutral\n"
+        "2018-07-15,France,Croatia,4,2,FIFA World Cup,Moscow,Russia,TRUE\n"
+        "2018-09-06,France,Germany,0,0,UEFA Nations League,Munich,Germany,FALSE\n"
+    )
+    out_path = tmp_path / "matches.parquet"
+
+    result_path = build_processed_matches(raw_csv, out_path)
+
+    assert result_path == out_path
+    df = pd.read_parquet(out_path)
+    expected_cols = {
+        "match_id",
+        "date",
+        "home_team",
+        "away_team",
+        "home_score",
+        "away_score",
+        "tournament",
+        "neutral",
+        "home_elo_before",
+        "away_elo_before",
+        "k_factor_used",
+    }
+    assert expected_cols.issubset(set(df.columns))
+    assert len(df) == 2
+    assert df["match_id"].is_unique
