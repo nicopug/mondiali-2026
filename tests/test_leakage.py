@@ -93,12 +93,12 @@ def test_days_rest_is_strictly_pre_match() -> None:
     # Confronto con NaN-aware
     h_obs = df_sorted["days_rest_home"].tolist()
     a_obs = df_sorted["days_rest_away"].tolist()
-    for obs, exp in zip(h_obs, expected_home):
+    for obs, exp in zip(h_obs, expected_home, strict=True):
         if pd.isna(exp):
             assert pd.isna(obs)
         else:
             assert obs == pytest.approx(exp)
-    for obs, exp in zip(a_obs, expected_away):
+    for obs, exp in zip(a_obs, expected_away, strict=True):
         if pd.isna(exp):
             assert pd.isna(obs)
         else:
