@@ -33,9 +33,10 @@ data/manual/*
 models/*
 !models/.gitkeep
 
-# Reports (archiviati fuori da git; tracked solo il README della cartella)
+# Reports: markdown tracked, output artifacts (plots/CSV/pickle) ignored
 reports/*
 !reports/.gitkeep
+!reports/*.md
 
 # Jupyter
 .ipynb_checkpoints/
