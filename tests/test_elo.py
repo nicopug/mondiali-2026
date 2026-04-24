@@ -1,6 +1,7 @@
 """Test del sistema Elo custom."""
 from __future__ import annotations
 
+import pandas as pd
 import pytest
 
 from mondiali.config import K_FACTORS
@@ -83,3 +84,95 @@ def test_classify_tournament_keys_match_k_factors_dict() -> None:
     """Ogni categoria ritornata da classify_tournament deve esistere in K_FACTORS."""
     categories = {"world_cup", "continental", "qualification", "friendly", "default"}
     assert categories == set(K_FACTORS.keys())
+
+
+def test_build_history_returns_pre_match_ratings_per_row() -> None:
+    """build_history aggiunge colonne home_elo_before e away_elo_before per ogni match."""
+    matches = pd.DataFrame(
+        {
+            "date": pd.to_datetime(["2020-01-01", "2020-01-02"]),
+            "home_team": ["A", "A"],
+            "away_team": ["B", "C"],
+            "home_score": [2, 1],
+            "away_score": [0, 1],
+            "tournament": ["Friendly", "Friendly"],
+            "neutral": [True, True],
+        }
+    )
+    elo = EloSystem()
+    result = elo.build_history(matches)
+
+    assert "home_elo_before" in result.columns
+    assert "away_elo_before" in result.columns
+
+    assert result.iloc[0]["home_elo_before"] == pytest.approx(DEFAULT_ELO, abs=0.01)
+    assert result.iloc[0]["away_elo_before"] == pytest.approx(DEFAULT_ELO, abs=0.01)
+
+    assert result.iloc[1]["home_elo_before"] > DEFAULT_ELO
+    assert result.iloc[1]["away_elo_before"] == pytest.approx(DEFAULT_ELO, abs=0.01)
+
+
+def test_build_history_preserves_row_order() -> None:
+    """L'output ha stessa lunghezza e stesso ordine dell'input."""
+    matches = pd.DataFrame(
+        {
+            "date": pd.to_datetime(["2020-01-01", "2020-01-02", "2020-01-03"]),
+            "home_team": ["A", "B", "C"],
+            "away_team": ["B", "C", "A"],
+            "home_score": [1, 2, 0],
+            "away_score": [1, 0, 3],
+            "tournament": ["Friendly", "Friendly", "Friendly"],
+            "neutral": [True, True, True],
+        }
+    )
+    result = EloSystem().build_history(matches)
+
+    assert len(result) == len(matches)
+    pd.testing.assert_series_equal(
+        result["date"].reset_index(drop=True), matches["date"].reset_index(drop=True)
+    )
+
+
+def test_build_history_uses_correct_k_factor_per_tournament() -> None:
+    """Match in WC usa K=60, Friendly K=20, quindi gli update sono diversi."""
+    matches_wc = pd.DataFrame(
+        {
+            "date": pd.to_datetime(["2020-01-01"]),
+            "home_team": ["A"],
+            "away_team": ["B"],
+            "home_score": [1],
+            "away_score": [0],
+            "tournament": ["FIFA World Cup"],
+            "neutral": [True],
+        }
+    )
+    matches_friendly = matches_wc.copy()
+    matches_friendly["tournament"] = ["Friendly"]
+
+    elo_wc = EloSystem()
+    elo_wc.build_history(matches_wc)
+
+    elo_fr = EloSystem()
+    elo_fr.build_history(matches_friendly)
+
+    delta_wc = elo_wc.get("A") - DEFAULT_ELO
+    delta_fr = elo_fr.get("A") - DEFAULT_ELO
+    assert delta_wc > delta_fr
+    assert delta_wc == pytest.approx(3 * delta_fr, abs=0.1)
+
+
+def test_build_history_raises_if_not_sorted_by_date() -> None:
+    """Input non ordinato per data → ValueError (protegge da data leakage sottile)."""
+    matches = pd.DataFrame(
+        {
+            "date": pd.to_datetime(["2020-01-02", "2020-01-01"]),
+            "home_team": ["A", "A"],
+            "away_team": ["B", "C"],
+            "home_score": [1, 1],
+            "away_score": [0, 0],
+            "tournament": ["Friendly", "Friendly"],
+            "neutral": [True, True],
+        }
+    )
+    with pytest.raises(ValueError, match="must be sorted by date ascending"):
+        EloSystem().build_history(matches)

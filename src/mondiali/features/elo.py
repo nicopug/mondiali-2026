@@ -9,9 +9,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+import pandas as pd
 import structlog
 
-from mondiali.config import HOME_ADVANTAGE
+from mondiali.config import HOME_ADVANTAGE, K_FACTORS
 
 log = structlog.get_logger(__name__)
 
@@ -106,3 +107,47 @@ class EloSystem:
         self.ratings[home] = elo_h + delta
         self.ratings[away] = elo_a - delta
         return elo_h, elo_a
+
+    def build_history(self, matches: pd.DataFrame) -> pd.DataFrame:
+        """Itera sui match (ordinati per data) e ritorna df con Elo pre-match per riga.
+
+        Colonne richieste in input: date, home_team, away_team, home_score, away_score,
+        tournament, neutral.
+
+        Output: stesse colonne + `home_elo_before`, `away_elo_before`, `k_factor_used`.
+
+        Muta lo stato interno (`self.ratings`) con i rating finali dopo tutti i match.
+
+        Raises:
+            ValueError: se `matches` non è ordinato per data crescente.
+        """
+        dates = matches["date"]
+        if not dates.is_monotonic_increasing:
+            raise ValueError(
+                "matches must be sorted by date ascending before calling build_history"
+            )
+
+        home_elo_before: list[float] = []
+        away_elo_before: list[float] = []
+        k_factors_used: list[int] = []
+
+        for row in matches.itertuples(index=False):
+            category = classify_tournament(row.tournament)
+            k = K_FACTORS[category]
+            pre_home, pre_away = self.update(
+                home=row.home_team,
+                away=row.away_team,
+                home_goals=int(row.home_score),
+                away_goals=int(row.away_score),
+                k_factor=float(k),
+                neutral=bool(row.neutral),
+            )
+            home_elo_before.append(pre_home)
+            away_elo_before.append(pre_away)
+            k_factors_used.append(k)
+
+        result = matches.copy()
+        result["home_elo_before"] = home_elo_before
+        result["away_elo_before"] = away_elo_before
+        result["k_factor_used"] = k_factors_used
+        return result
