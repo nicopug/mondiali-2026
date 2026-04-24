@@ -4,7 +4,8 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from mondiali.config import K_FACTORS
+from mondiali.config import CONFIG, K_FACTORS
+from mondiali.data.ingestion import load_international_results
 from mondiali.features.elo import DEFAULT_ELO, EloSystem, classify_tournament
 
 
@@ -176,3 +177,40 @@ def test_build_history_raises_if_not_sorted_by_date() -> None:
     )
     with pytest.raises(ValueError, match="must be sorted by date ascending"):
         EloSystem().build_history(matches)
+
+
+def test_elo_france_end_2018_in_plausible_range() -> None:
+    """Sanity check: Elo Francia fine 2018 (post WC win) in [1950, 2200]."""
+    csv_path = CONFIG.data_raw / "results.csv"
+    if not csv_path.exists():
+        pytest.skip(f"{csv_path} not found — run `mondiali ingest` first")
+
+    df = load_international_results(csv_path)
+    df = df[(df["date"] >= "2002-01-01") & (df["date"] <= "2018-12-31")].copy()
+    df = df.sort_values("date").reset_index(drop=True)
+
+    elo = EloSystem()
+    elo.build_history(df)
+
+    france_elo = elo.get("France")
+    assert 1950.0 <= france_elo <= 2200.0, (
+        f"Francia Elo = {france_elo:.1f}, fuori range [1950, 2200] — "
+        "formula Elo o K-factor potrebbero essere buggate"
+    )
+
+
+def test_elo_top_teams_end_2018_all_high() -> None:
+    """Francia e Brasile a fine 2018 sopra 1900: top mondiali di quel periodo."""
+    csv_path = CONFIG.data_raw / "results.csv"
+    if not csv_path.exists():
+        pytest.skip(f"{csv_path} not found")
+
+    df = load_international_results(csv_path)
+    df = df[(df["date"] >= "2002-01-01") & (df["date"] <= "2018-12-31")].copy()
+    df = df.sort_values("date").reset_index(drop=True)
+
+    elo = EloSystem()
+    elo.build_history(df)
+
+    for team in ["France", "Brazil"]:
+        assert elo.get(team) > 1900.0, f"{team} Elo = {elo.get(team):.1f}, below 1900"
