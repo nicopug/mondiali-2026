@@ -68,3 +68,38 @@ def test_no_future_matches_in_processed() -> None:
         f"Found {len(future_rows)} future matches in processed set — "
         f"likely ingestion bug or unresolved fixtures slipped through"
     )
+
+
+def test_days_rest_is_strictly_pre_match() -> None:
+    """Per ogni match, days_rest_home/away riflette la storia PRIMA di quella data.
+    Ri-simuliamo e confrontiamo.
+    """
+    df = _load_processed()
+    if df is None:
+        pytest.skip("data/processed/matches.parquet not found")
+
+    df_sorted = df.sort_values("date", kind="mergesort").reset_index(drop=True)
+    last_seen: dict[str, pd.Timestamp] = {}
+    expected_home: list[float] = []
+    expected_away: list[float] = []
+    for row in df_sorted.itertuples(index=False):
+        prev_h = last_seen.get(row.home_team)
+        prev_a = last_seen.get(row.away_team)
+        expected_home.append(float("nan") if prev_h is None else (row.date - prev_h).days)
+        expected_away.append(float("nan") if prev_a is None else (row.date - prev_a).days)
+        last_seen[row.home_team] = row.date
+        last_seen[row.away_team] = row.date
+
+    # Confronto con NaN-aware
+    h_obs = df_sorted["days_rest_home"].tolist()
+    a_obs = df_sorted["days_rest_away"].tolist()
+    for obs, exp in zip(h_obs, expected_home):
+        if pd.isna(exp):
+            assert pd.isna(obs)
+        else:
+            assert obs == pytest.approx(exp)
+    for obs, exp in zip(a_obs, expected_away):
+        if pd.isna(exp):
+            assert pd.isna(obs)
+        else:
+            assert obs == pytest.approx(exp)

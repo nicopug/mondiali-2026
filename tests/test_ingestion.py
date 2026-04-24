@@ -151,3 +151,25 @@ def test_build_processed_matches_produces_expected_schema(tmp_path: Path) -> Non
     assert expected_cols.issubset(set(df.columns))
     assert len(df) == 2
     assert df["match_id"].is_unique
+
+
+def test_build_processed_matches_includes_tier1_features(tmp_path: Path) -> None:
+    """matches.parquet deve includere competition_importance + days_rest_*."""
+    raw_csv = tmp_path / "results.csv"
+    raw_csv.write_text(
+        "date,home_team,away_team,home_score,away_score,tournament,city,country,neutral\n"
+        "2018-07-15,France,Croatia,4,2,FIFA World Cup,Moscow,Russia,TRUE\n"
+        "2018-09-06,France,Germany,0,0,UEFA Nations League,Munich,Germany,FALSE\n"
+    )
+    out_path = tmp_path / "matches.parquet"
+    build_processed_matches(raw_csv, out_path)
+
+    df = pd.read_parquet(out_path)
+    for col in ("competition_importance", "days_rest_home", "days_rest_away", "days_rest_diff"):
+        assert col in df.columns
+
+    # France match 1 = WC → 4, match 2 = Nations League → 1
+    assert df.iloc[0]["competition_importance"] == 4
+    assert df.iloc[1]["competition_importance"] == 1
+    # days_rest_home per Francia nella seconda riga = 53 giorni
+    assert df.iloc[1]["days_rest_home"] == 53.0

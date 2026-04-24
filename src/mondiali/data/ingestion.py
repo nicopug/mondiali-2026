@@ -8,6 +8,7 @@ import requests
 import structlog
 
 from mondiali.features.elo import EloSystem
+from mondiali.features.tier1 import add_tier1_features
 
 log = structlog.get_logger(__name__)
 
@@ -86,6 +87,7 @@ def build_processed_matches(raw_csv: Path, out_path: Path) -> Path:
     df = load_international_results(raw_csv)
     elo = EloSystem()
     df = elo.build_history(df)
+    df = add_tier1_features(df)
 
     df["match_id"] = (
         df["date"].dt.strftime("%Y%m%d")
