@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import pytest
 
-from mondiali.features.elo import DEFAULT_ELO, EloSystem
+from mondiali.config import K_FACTORS
+from mondiali.features.elo import DEFAULT_ELO, EloSystem, classify_tournament
 
 
 def test_elo_system_initializes_teams_at_default() -> None:
@@ -55,3 +56,30 @@ def test_elo_update_magnitude_proportional_to_k() -> None:
     delta_a = elo_a.get("X") - DEFAULT_ELO
     delta_b = elo_b.get("X") - DEFAULT_ELO
     assert delta_b == pytest.approx(2 * delta_a, abs=0.01)
+
+
+@pytest.mark.parametrize(
+    ("tournament", "expected"),
+    [
+        ("FIFA World Cup", "world_cup"),
+        ("FIFA World Cup qualification", "qualification"),
+        ("UEFA Euro", "continental"),
+        ("UEFA Euro qualification", "qualification"),
+        ("Copa América", "continental"),
+        ("African Cup of Nations", "continental"),
+        ("AFC Asian Cup", "continental"),
+        ("Gold Cup", "continental"),
+        ("Friendly", "friendly"),
+        ("UEFA Nations League", "default"),
+        ("Something random", "default"),
+    ],
+)
+def test_classify_tournament_maps_correctly(tournament: str, expected: str) -> None:
+    """`classify_tournament` associa ogni nome alla categoria K corretta."""
+    assert classify_tournament(tournament) == expected
+
+
+def test_classify_tournament_keys_match_k_factors_dict() -> None:
+    """Ogni categoria ritornata da classify_tournament deve esistere in K_FACTORS."""
+    categories = {"world_cup", "continental", "qualification", "friendly", "default"}
+    assert categories == set(K_FACTORS.keys())

@@ -21,9 +21,32 @@ DEFAULT_ELO: int = 1500
 def classify_tournament(tournament: str) -> str:
     """Mappa il nome del torneo alle categorie di K-factor.
 
-    Returns one of: 'world_cup', 'continental', 'qualification', 'friendly', 'default'.
+    Regole (ordine di precedenza):
+    1. se contiene 'qualification' → 'qualification' (batte tutto)
+    2. 'FIFA World Cup' (senza qualification) → 'world_cup'
+    3. Euro, Copa, AFC Asian Cup, African Cup, Gold Cup → 'continental'
+    4. 'Friendly' → 'friendly'
+    5. altrimenti (Nations League, tornei minori) → 'default'
     """
-    raise NotImplementedError  # Task 7
+    t = tournament.lower()
+    if "qualification" in t:
+        return "qualification"
+    if "fifa world cup" in t:
+        return "world_cup"
+    continental_keywords = (
+        "uefa euro",
+        "copa américa",
+        "copa america",
+        "african cup of nations",
+        "africa cup of nations",
+        "afc asian cup",
+        "gold cup",
+    )
+    if any(kw in t for kw in continental_keywords):
+        return "continental"
+    if t == "friendly":
+        return "friendly"
+    return "default"
 
 
 @dataclass
