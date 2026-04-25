@@ -17,7 +17,13 @@ from mondiali.training.evaluate import compute_outcomes
 
 
 class EloLogisticBaseline:
-    """LogisticRegression multi-classe su [elo_diff, is_neutral_int]."""
+    """LogisticRegression multi-classe su [elo_diff, is_neutral_int].
+
+    Note: features are NOT standardized. C=1.0 is the canonical baseline value;
+    elo_diff scale (~150-300 std) means L2 effectively only regularizes the
+    neutral coef. Do NOT tune C without first standardizing — it would change
+    the gate baseline retroactively.
+    """
 
     def __init__(self, *, C: float = 1.0, random_state: int = 42) -> None:  # noqa: N803
         self.C = C

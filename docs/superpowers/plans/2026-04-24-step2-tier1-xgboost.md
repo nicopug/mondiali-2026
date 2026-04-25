@@ -711,7 +711,6 @@ class EloLogisticBaseline:
         y = compute_outcomes(matches)
         self.model_ = LogisticRegression(
             C=self.C,
-            multi_class="multinomial",
             solver="lbfgs",
             max_iter=1000,
             random_state=self.random_state,
@@ -722,7 +721,7 @@ class EloLogisticBaseline:
         if self.model_ is None:
             raise RuntimeError("EloLogisticBaseline must be fit() before predict_proba")
         X = self._design_matrix(matches)
-        return self.model_.predict_proba(X)
+        return np.asarray(self.model_.predict_proba(X))
 ```
 
 - [ ] **Step 4.4: Verifica verde + lint**
