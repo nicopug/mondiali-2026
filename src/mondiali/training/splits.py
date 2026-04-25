@@ -1,6 +1,7 @@
 """Walk-forward CV splits (expanding window, mai random).
 
-Conforme a spec §7.2: 3 fold su 2002-2018 con val di 1 anno ciascuno.
+Default config (spec §7.2): 3 fold con val di 1 anno ciascuno.
+Boundaries half-open `[start, end)` — robuste a Timestamp con time-component.
 """
 from __future__ import annotations
 
@@ -22,21 +23,24 @@ def walk_forward_splits(
 
     Args:
         matches: DataFrame con colonna `date`.
-        n_folds: numero di fold.
-        val_years: ampiezza del validation window per fold, in anni.
+        n_folds: numero di fold (>= 1).
+        val_years: ampiezza del validation window per fold, in anni (>= 1).
 
     Yields:
         (train_df, val_df) — fold-size crescenti, nessun overlap.
     """
+    if n_folds < 1 or val_years < 1:
+        raise ValueError(
+            f"n_folds and val_years must be >= 1, got {n_folds=}, {val_years=}"
+        )
     if matches.empty:
         return
-    max_year = matches["date"].dt.year.max()
+    max_year = int(matches["date"].dt.year.max())
     for i in range(n_folds):
         val_year_end = max_year - (n_folds - 1 - i) * val_years
         val_year_start = val_year_end - val_years + 1
-        train_end = pd.Timestamp(year=val_year_start - 1, month=12, day=31)
-        val_start = pd.Timestamp(year=val_year_start, month=1, day=1)
-        val_end = pd.Timestamp(year=val_year_end, month=12, day=31)
-        train = matches[matches["date"] <= train_end]
-        val = matches[(matches["date"] >= val_start) & (matches["date"] <= val_end)]
+        train_end = pd.Timestamp(year=val_year_start, month=1, day=1)
+        val_end_excl = pd.Timestamp(year=val_year_end + 1, month=1, day=1)
+        train = matches[matches["date"] < train_end].copy()
+        val = matches[(matches["date"] >= train_end) & (matches["date"] < val_end_excl)].copy()
         yield train, val
