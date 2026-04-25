@@ -1,10 +1,17 @@
 """Test symmetric row builder + XGBoost Poisson training."""
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
+import pytest
 
-from mondiali.model.poisson_xgb import SYMMETRIC_FEATURES, build_symmetric_rows
+from mondiali.model.poisson_xgb import (
+    SYMMETRIC_FEATURES,
+    PoissonXGBModel,
+    build_symmetric_rows,
+)
 
 
 def _sample_processed() -> pd.DataFrame:
@@ -122,3 +129,49 @@ def test_build_symmetric_rows_propagates_nan_in_days_rest() -> None:
     opp_rest_col = SYMMETRIC_FEATURES.index("opponent_days_rest")
     assert np.isnan(X[0, rest_col])  # match0 home-perspective: team_days_rest = NaN
     assert np.isnan(X[1, opp_rest_col])  # match0 away-perspective: opponent_days_rest = NaN
+
+
+def test_poisson_xgb_fit_returns_self() -> None:
+    df = _sample_processed()
+    # Duplica con rng per avere abbastanza dati
+    df_big = pd.concat([df] * 100, ignore_index=True)
+    model = PoissonXGBModel()
+    result = model.fit(df_big)
+    assert result is model
+
+
+def test_poisson_xgb_predict_lambda_positive_and_shape() -> None:
+    """predict_lambda ritorna (lambda_home, lambda_away) > 0 per ogni match."""
+    df = _sample_processed()
+    df_big = pd.concat([df] * 100, ignore_index=True)
+    model = PoissonXGBModel().fit(df_big)
+
+    lam_h, lam_a = model.predict_lambda(df)
+    assert lam_h.shape == (len(df),)
+    assert lam_a.shape == (len(df),)
+    assert (lam_h > 0).all()
+    assert (lam_a > 0).all()
+
+
+def test_poisson_xgb_predict_before_fit_raises() -> None:
+    df = _sample_processed()
+    model = PoissonXGBModel()
+    with pytest.raises(RuntimeError, match="fit"):
+        model.predict_lambda(df)
+
+
+def test_poisson_xgb_json_serialization_roundtrip(tmp_path: Path) -> None:
+    """Serializzazione JSON nativa: dopo save/load predict_lambda è identico."""
+    df = _sample_processed()
+    df_big = pd.concat([df] * 50, ignore_index=True)
+    model = PoissonXGBModel().fit(df_big)
+    lam_h_before, lam_a_before = model.predict_lambda(df)
+
+    json_path = tmp_path / "model.json"
+    model.save(json_path)
+
+    loaded = PoissonXGBModel()
+    loaded.load(json_path)
+    lam_h_after, lam_a_after = loaded.predict_lambda(df)
+    np.testing.assert_allclose(lam_h_before, lam_h_after, rtol=1e-6)
+    np.testing.assert_allclose(lam_a_before, lam_a_after, rtol=1e-6)

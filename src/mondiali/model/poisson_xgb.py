@@ -8,8 +8,17 @@ Conforme a spec §6.1 (symmetric single-model).
 """
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Any
+
 import numpy as np
 import pandas as pd
+import structlog
+import xgboost as xgb
+
+from mondiali.config import RANDOM_STATE
+
+log = structlog.get_logger(__name__)
 
 SYMMETRIC_FEATURES: list[str] = [
     "team_elo",
@@ -21,6 +30,21 @@ SYMMETRIC_FEATURES: list[str] = [
     "team_days_rest",
     "opponent_days_rest",
 ]
+
+DEFAULT_PARAMS: dict[str, Any] = {
+    "objective": "count:poisson",
+    "tree_method": "hist",
+    "max_depth": 6,
+    "learning_rate": 0.05,
+    "reg_alpha": 0.1,
+    "reg_lambda": 1.0,
+    "min_child_weight": 1,
+    "subsample": 0.9,
+    "colsample_bytree": 0.9,
+    "n_estimators": 2000,
+    "random_state": RANDOM_STATE,
+    "verbosity": 0,
+}
 
 
 def build_symmetric_rows(matches: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
@@ -67,3 +91,61 @@ def build_symmetric_rows(matches: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]
     y[1::2] = a_goals
 
     return X, y
+
+
+class PoissonXGBModel:
+    """Wrapper XGBoost symmetric single-model per predizione lambda gol.
+
+    `fit(matches)` costruisce le righe simmetriche e addestra XGBRegressor con
+    objective `count:poisson`. `predict_lambda(matches)` ritorna
+    (lambda_home, lambda_away) per ogni match.
+    """
+
+    def __init__(self, params: dict[str, Any] | None = None) -> None:
+        self.params: dict[str, Any] = {**DEFAULT_PARAMS, **(params or {})}
+        self.booster_: xgb.XGBRegressor | None = None
+
+    def fit(
+        self,
+        matches: pd.DataFrame,
+        *,
+        early_stopping_val: pd.DataFrame | None = None,
+        early_stopping_rounds: int = 50,
+    ) -> PoissonXGBModel:
+        """Addestra il modello. Se `early_stopping_val` è fornito, early stop."""
+        X, y = build_symmetric_rows(matches)  # noqa: N806
+        fit_kwargs: dict[str, Any] = {}
+        if early_stopping_val is not None:
+            X_val, y_val = build_symmetric_rows(early_stopping_val)  # noqa: N806
+            fit_kwargs["eval_set"] = [(X_val, y_val)]
+            fit_kwargs["verbose"] = False
+            params = {**self.params, "early_stopping_rounds": early_stopping_rounds}
+        else:
+            params = self.params
+        self.booster_ = xgb.XGBRegressor(**params)
+        self.booster_.fit(X, y, **fit_kwargs)
+        log.info("poisson_xgb fit done", n_rows=len(X))
+        return self
+
+    def predict_lambda(self, matches: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+        """Ritorna (lambda_home, lambda_away) per ogni match (shape (n,), (n,))."""
+        if self.booster_ is None:
+            raise RuntimeError("PoissonXGBModel must be fit() before predict_lambda")
+        X, _ = build_symmetric_rows(matches)  # noqa: N806
+        preds = self.booster_.predict(X)
+        lam_h = preds[0::2]
+        lam_a = preds[1::2]
+        return lam_h, lam_a
+
+    def save(self, path: Path) -> None:
+        """Salva il booster in formato JSON nativo (non pickle)."""
+        if self.booster_ is None:
+            raise RuntimeError("fit() prima di save()")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.booster_.save_model(str(path))
+
+    def load(self, path: Path) -> PoissonXGBModel:
+        """Carica un booster salvato."""
+        self.booster_ = xgb.XGBRegressor(**self.params)
+        self.booster_.load_model(str(path))
+        return self
