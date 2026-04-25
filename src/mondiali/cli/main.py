@@ -13,6 +13,7 @@ import typer
 
 from mondiali.config import CONFIG
 from mondiali.data.ingestion import build_processed_matches, download_international_results
+from mondiali.model.elo_logistic import EloLogisticBaseline
 from mondiali.training.baseline_prior import PriorBaseline
 from mondiali.training.evaluate import log_loss_1x2
 
@@ -61,6 +62,39 @@ def baseline(
     val_probs = model.predict_proba(val)
     val_loss = log_loss_1x2(val, val_probs)
     typer.echo(f"Validation log-loss (Tier 0 prior baseline): {val_loss:.4f}")
+
+
+@app.command(name="train-elo")
+def train_elo(
+    train_start: str = typer.Option("2002-01-01"),
+    train_end: str = typer.Option("2018-12-31"),
+    val_start: str = typer.Option("2019-01-01"),
+    val_end: str = typer.Option("2022-06-30"),
+) -> None:
+    """Fit Elo-only logistic baseline, report log-loss su validation."""
+    processed = CONFIG.data_processed / "matches.parquet"
+    if not processed.exists():
+        typer.echo("matches.parquet non trovato - esegui `mondiali ingest` prima", err=True)
+        raise typer.Exit(1)
+
+    df = pd.read_parquet(processed)
+    df["date"] = pd.to_datetime(df["date"])
+    train = df[(df["date"] >= train_start) & (df["date"] <= train_end)]
+    val = df[(df["date"] >= val_start) & (df["date"] <= val_end)]
+    if train.empty or val.empty:
+        typer.echo("Train o val vuoti - controlla i range date", err=True)
+        raise typer.Exit(1)
+
+    typer.echo(f"Train: {len(train)} matches ({train_start} -> {train_end})")
+    typer.echo(f"Val:   {len(val)} matches ({val_start} -> {val_end})")
+
+    model = EloLogisticBaseline().fit(train)
+    val_probs = model.predict_proba(val)
+    val_loss = log_loss_1x2(val, val_probs)
+    typer.echo(f"Elo-only logistic validation log-loss: {val_loss:.4f}")
+    assert model.model_ is not None
+    coef = model.model_.coef_[0]
+    typer.echo(f"Coefficienti: elo_diff={coef[0]:.6f}, is_neutral={coef[1]:.5f}")
 
 
 if __name__ == "__main__":

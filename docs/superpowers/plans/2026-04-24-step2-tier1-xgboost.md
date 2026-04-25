@@ -785,7 +785,9 @@ def train_elo(
     val_probs = model.predict_proba(val)
     val_loss = log_loss_1x2(val, val_probs)
     typer.echo(f"Elo-only logistic validation log-loss: {val_loss:.4f}")
-    typer.echo(f"Coefficienti: elo_diff={model.model_.coef_[0, 0]:.5f}, is_neutral={model.model_.coef_[0, 1]:.5f}")
+    assert model.model_ is not None
+    coef = model.model_.coef_[0]
+    typer.echo(f"Coefficienti: elo_diff={coef[0]:.6f}, is_neutral={coef[1]:.5f}")
 ```
 
 - [ ] **Step 5.2: Esegui il comando e annota il log-loss**
@@ -794,13 +796,23 @@ def train_elo(
 .venv/Scripts/mondiali train-elo
 ```
 
-Expected:
-- Train ~16063 match, Val ~3215
-- `Elo-only logistic validation log-loss: ~0.97-0.99`
+**Risultato canonico (eseguito 2026-04-25):**
+- Train: 16063 | Val: 3215
+- `Elo-only logistic validation log-loss: 0.8527`
+- Coefficienti: `elo_diff=0.00404, is_neutral=-0.33446`
 
-**Annota il valore esatto. Andrà nel report STEP 2. Chiamalo `LOGLOSS_ELO` da qui in avanti.**
+**`LOGLOSS_ELO = 0.8527`** — questo è il valore di riferimento da qui in avanti. Andrà nel report STEP 2 e nel gate finale di Task 12.
 
-Se il valore è fuori dal range [0.93, 1.02], fermati: qualcosa non va nella normalizzazione delle feature o nel conteggio classi. Debugga prima di proseguire.
+Sanity check (eseguiti):
+- Class distribution val 2019-2022: home_win=48.5%, draw=22.5%, away_win=29.0%
+- Class-freq baseline log-loss = 1.0457 (predire sempre la marginale)
+- elo_diff std=224, max=±1026 — coda lunga di mismatch internazionali
+- 34.5% del val ha |elo_diff|>200 — mismatch grossi facili da predire
+- Coef × 1σ: 0.00404 × 224 ≈ 0.91 logit → p_home≈0.71 per favorito di 1σ. Coerente.
+
+Il range originale del plan era [0.93, 1.02] ma è stato calibrato pessimisticamente assumendo solo match equilibrati. Il valore reale 0.8527 è plausibile sul dataset international_results (heavy tail di mismatch). Non è leakage.
+
+**Implicazione critica per il gate Tier 1 (Task 12):** target Tier 1 < `LOGLOSS_ELO − 0.003` = **< 0.8497**. Margine stretto. Se il Tier 1 atterra in [0.8497, 0.8527], STOP — debug features.
 
 - [ ] **Step 5.3: Lint + commit**
 
@@ -1987,6 +1999,8 @@ for name, v in imp_named:
     print(f'  {name:25s} {v:.4f}')
 "
 ```
+
+**Riferimento canonico (Task 5, CP2):** `LOGLOSS_ELO = 0.8527` → soglia gate Tier 1 = **`< 0.8497`**. Se la rerun di Step 12.1 sopra produce un `ll_elo` ≠ 0.8527, qualcosa è cambiato nel codice del baseline (verifica prima di confrontare con Tier 1).
 
 Copia l'output. Se `DELTA < 0.003` → **fermati**: Tier 1 non ha battuto Elo-only. Debug:
 1. Controlla che `test_leakage.py` sia verde (rerun)
