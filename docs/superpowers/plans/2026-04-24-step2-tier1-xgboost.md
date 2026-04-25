@@ -890,7 +890,9 @@ def test_build_symmetric_rows_is_home_flag_alternates() -> None:
     df = _sample_processed()
     X, _ = build_symmetric_rows(df)
     is_home_col = SYMMETRIC_FEATURES.index("is_home")
-    assert X[:, is_home_col].tolist() == [1.0, 0.0, 1.0, 0.0]
+    # Match 0 (non-neutral): home=1, away=0. Match 1 (neutral): home=0, away=0
+    # perché il vantaggio casa reale non si applica in venue neutrale.
+    assert X[:, is_home_col].tolist() == [1.0, 0.0, 0.0, 0.0]
 
 
 def test_build_symmetric_rows_flips_elo_per_perspective() -> None:

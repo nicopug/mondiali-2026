@@ -1,6 +1,7 @@
 """Test symmetric row builder + XGBoost Poisson training."""
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 from mondiali.model.poisson_xgb import SYMMETRIC_FEATURES, build_symmetric_rows
@@ -77,3 +78,47 @@ def test_build_symmetric_rows_respects_neutral_flag() -> None:
     # Match 1: FIFA WC, neutral=True → entrambe le righe devono avere is_home=0
     assert X[2, is_home_col] == 0.0
     assert X[3, is_home_col] == 0.0
+
+
+def test_build_symmetric_rows_shape_width_matches_features() -> None:
+    """X.shape[1] deve combaciare con len(SYMMETRIC_FEATURES) — pin contro reorder/drop."""
+    df = _sample_processed()
+    X, _ = build_symmetric_rows(df)  # noqa: N806
+    assert X.shape == (2 * len(df), len(SYMMETRIC_FEATURES))
+
+
+def test_symmetric_features_column_order_is_pinned() -> None:
+    """Pin esplicito sull'ordine — Task 7+ (PoissonXGBModel) e Tasks downstream
+    indicizzano per posizione, non per nome. Reorder è breaking change.
+    """
+    assert SYMMETRIC_FEATURES == [
+        "team_elo",
+        "opponent_elo",
+        "elo_diff_signed",
+        "is_home",
+        "is_neutral",
+        "competition_importance",
+        "team_days_rest",
+        "opponent_days_rest",
+    ]
+
+
+def test_build_symmetric_rows_empty_df_returns_zero_shaped_arrays() -> None:
+    """DataFrame vuoto -> X (0, k), y (0,) — niente eccezioni."""
+    empty = _sample_processed().iloc[0:0]
+    X, y = build_symmetric_rows(empty)  # noqa: N806
+    assert X.shape == (0, len(SYMMETRIC_FEATURES))
+    assert y.shape == (0,)
+
+
+def test_build_symmetric_rows_propagates_nan_in_days_rest() -> None:
+    """Task 1 lascia NaN in days_rest_* per la prima partita di ogni team. XGBoost
+    gestisce NaN nativamente; la funzione deve propagarli senza errori.
+    """
+    df = _sample_processed()
+    df.loc[0, "days_rest_home"] = float("nan")
+    X, _ = build_symmetric_rows(df)  # noqa: N806
+    rest_col = SYMMETRIC_FEATURES.index("team_days_rest")
+    opp_rest_col = SYMMETRIC_FEATURES.index("opponent_days_rest")
+    assert np.isnan(X[0, rest_col])  # match0 home-perspective: team_days_rest = NaN
+    assert np.isnan(X[1, opp_rest_col])  # match0 away-perspective: opponent_days_rest = NaN
