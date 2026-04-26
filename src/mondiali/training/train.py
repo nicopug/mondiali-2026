@@ -50,11 +50,19 @@ def train_tier1_pipeline(
 ) -> dict[str, Any]:
     """Pipeline completa. Ritorna un dizionario con metriche + modello.
 
+    ⚠ Bias noto: la val è usata sia come `early_stopping_val` sia come set di
+    metrica finale. L'iterazione ottimale di XGBoost è quindi selezionata
+    *sul* val set, e `val_log_loss_1x2` è ottimisticamente biased come stima
+    di generalizzazione. Per un'evaluation pulita servirebbe una terza fetta
+    (es. carve-out dal train per ES). Per la gate decision di Task 12 questa
+    cifra è comunque comparabile con `LOGLOSS_ELO` se anche il baseline non
+    usa val per tuning.
+
     Returns:
         dict con chiavi:
         - model: PoissonXGBModel addestrato
         - rho: float (Dixon-Coles stimato)
-        - val_log_loss_1x2: float
+        - val_log_loss_1x2: float (ottimisticamente biased, vedi sopra)
         - lambda_home_mean, lambda_away_mean: float
         - n_train, n_val: int
     """
