@@ -53,21 +53,6 @@ def dixon_coles_correct(
     return result
 
 
-def _tau(  # noqa: PLR0913 - DC tau formula has 5 inputs by definition
-    home_goals: int, away_goals: int, lam_h: float, lam_a: float, rho: float
-) -> float:
-    """Fattore di correzione DC per la cella (home_goals, away_goals)."""
-    if home_goals == 0 and away_goals == 0:
-        return 1.0 - lam_h * lam_a * rho
-    if home_goals == 0 and away_goals == 1:
-        return 1.0 + lam_h * rho
-    if home_goals == 1 and away_goals == 0:
-        return 1.0 + lam_a * rho
-    if home_goals == 1 and away_goals == 1:
-        return 1.0 - rho
-    return 1.0
-
-
 def estimate_rho_mle(
     lam_home: np.ndarray,
     lam_away: np.ndarray,

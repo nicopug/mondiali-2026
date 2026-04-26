@@ -1492,20 +1492,12 @@ Expected: 2 fail ImportError.
 
 Aggiungi in `src/mondiali/model/dixon_coles.py`:
 
+> Nota implementativa (Task 9 follow-up): `_tau` non è incluso. La MLE
+> vettorializza le 4 formule DC con maschere booleane (più veloce di un loop
+> di chiamate scalari) e `dixon_coles_correct` le applica direttamente sulla
+> matrice. Estrarre `_tau` come helper duplicherebbe la formula in 3 punti.
+
 ```python
-def _tau(home_goals: int, away_goals: int, lam_h: float, lam_a: float, rho: float) -> float:
-    """Fattore di correzione DC per la cella (home_goals, away_goals)."""
-    if home_goals == 0 and away_goals == 0:
-        return 1.0 - lam_h * lam_a * rho
-    if home_goals == 0 and away_goals == 1:
-        return 1.0 + lam_h * rho
-    if home_goals == 1 and away_goals == 0:
-        return 1.0 + lam_a * rho
-    if home_goals == 1 and away_goals == 1:
-        return 1.0 - rho
-    return 1.0
-
-
 def estimate_rho_mle(
     lam_home: np.ndarray,
     lam_away: np.ndarray,
