@@ -68,3 +68,4 @@ ignore_missing_imports = true
 minversion = "7.0"
 testpaths = ["tests"]
 addopts = "-ra -q --strict-markers"
+markers = ["slow: test lenti (training XGBoost su dati reali)"]

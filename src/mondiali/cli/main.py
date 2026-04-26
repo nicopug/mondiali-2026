@@ -16,6 +16,7 @@ from mondiali.data.ingestion import build_processed_matches, download_internatio
 from mondiali.model.elo_logistic import EloLogisticBaseline
 from mondiali.training.baseline_prior import PriorBaseline
 from mondiali.training.evaluate import log_loss_1x2
+from mondiali.training.train import train_tier1_pipeline
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
 log = structlog.get_logger(__name__)
@@ -95,6 +96,40 @@ def train_elo(
     assert model.model_ is not None
     coef = model.model_.coef_[0]
     typer.echo(f"Coefficienti: elo_diff={coef[0]:.6f}, is_neutral={coef[1]:.5f}")
+
+
+@app.command(name="train-tier1")
+def train_tier1(
+    train_start: str = typer.Option("2002-01-01"),
+    train_end: str = typer.Option("2018-12-31"),
+    val_start: str = typer.Option("2019-01-01"),
+    val_end: str = typer.Option("2022-06-30"),
+    save_model: bool = typer.Option(False, "--save", help="Salva il modello in models/tier1/"),
+) -> None:
+    """Addestra Tier 1 (XGBoost Poisson + Dixon-Coles), report log-loss."""
+    parquet = CONFIG.data_processed / "matches.parquet"
+    result = train_tier1_pipeline(
+        parquet_path=parquet,
+        train_start=train_start,
+        train_end=train_end,
+        val_start=val_start,
+        val_end=val_end,
+    )
+    typer.echo(f"Train: {result['n_train']} | Val: {result['n_val']}")
+    typer.echo(f"Dixon-Coles rho: {result['rho']:.4f}")
+    typer.echo(
+        f"lambda_home_mean: {result['lambda_home_mean']:.3f} | "
+        f"lambda_away_mean: {result['lambda_away_mean']:.3f}"
+    )
+    typer.echo(
+        f"Tier 1 validation log-loss (1X2 calibrated by DC only): "
+        f"{result['val_log_loss_1x2']:.4f}"
+    )
+
+    if save_model:
+        out = CONFIG.models_dir / "tier1" / "xgb_poisson.json"
+        result["model"].save(out)
+        typer.echo(f"Model saved: {out}")
 
 
 if __name__ == "__main__":
