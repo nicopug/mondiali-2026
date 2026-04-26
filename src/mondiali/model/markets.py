@@ -24,7 +24,17 @@ def prob_1x2(joint: np.ndarray) -> tuple[float, float, float]:
 
 
 def prob_over_under(joint: np.ndarray, *, threshold: float = 2.5) -> tuple[float, float]:
-    """Ritorna (P(over), P(under)) per `total goals` rispetto a `threshold`."""
+    """Ritorna (P(over), P(under)) per `total goals` rispetto a `threshold`.
+
+    `threshold` deve essere half-integer (2.5, 3.5, ...): convenzione standard
+    dei mercati di calcio. Soglie intere (es. 2.0) creerebbero un caso "void"
+    e farebbero P(over)+P(under)<1 sui pareggi su quella linea.
+    """
+    doubled = threshold * 2.0
+    if not float(doubled).is_integer() or int(doubled) % 2 == 0:
+        raise ValueError(
+            f"threshold must be half-integer (e.g. 2.5, 3.5); got {threshold}"
+        )
     n = joint.shape[0]
     idx = np.arange(n)
     i_grid, j_grid = np.meshgrid(idx, idx, indexing="ij")

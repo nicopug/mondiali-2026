@@ -60,3 +60,16 @@ def test_prob_btts_high_lambdas_increases_p_yes() -> None:
     p_yes_low, _ = prob_btts(m_low)
     p_yes_high, _ = prob_btts(m_high)
     assert p_yes_high > p_yes_low
+
+
+def test_prob_over_under_rejects_integer_threshold() -> None:
+    """Soglia intera (es. 2.0) creerebbe over+under<1 sui pareggi sulla linea.
+
+    La convenzione di mercato è half-integer; rifiutare integer è hardening
+    contro un footgun silenzioso.
+    """
+    m = _normalized_joint(1.5, 1.2)
+    with pytest.raises(ValueError, match="half-integer"):
+        prob_over_under(m, threshold=2.0)
+    with pytest.raises(ValueError, match="half-integer"):
+        prob_over_under(m, threshold=2.7)
