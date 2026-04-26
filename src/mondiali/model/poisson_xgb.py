@@ -145,7 +145,15 @@ class PoissonXGBModel:
         self.booster_.save_model(str(path))
 
     def load(self, path: Path) -> PoissonXGBModel:
-        """Carica un booster salvato."""
-        self.booster_ = xgb.XGBRegressor(**self.params)
+        """Carica un booster salvato.
+
+        Nota: il regressor è costruito senza `self.params` perché `load_model`
+        ripristina gli iperparametri di training; usare `self.params` farebbe
+        sì che `.get_params()` mentisse quando l'istanza è stata creata con
+        params diversi da quelli usati al training.
+        """
+        if not path.exists():
+            raise FileNotFoundError(path)
+        self.booster_ = xgb.XGBRegressor()
         self.booster_.load_model(str(path))
         return self

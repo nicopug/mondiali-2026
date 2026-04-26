@@ -160,6 +160,39 @@ def test_poisson_xgb_predict_before_fit_raises() -> None:
         model.predict_lambda(df)
 
 
+def test_poisson_xgb_save_before_fit_raises(tmp_path: Path) -> None:
+    """save() prima di fit() deve sollevare RuntimeError, non scrivere file vuoti."""
+    model = PoissonXGBModel()
+    with pytest.raises(RuntimeError, match="fit"):
+        model.save(tmp_path / "noop.json")
+
+
+def test_poisson_xgb_load_missing_file_raises(tmp_path: Path) -> None:
+    """load() su path inesistente deve sollevare FileNotFoundError chiaro."""
+    model = PoissonXGBModel()
+    with pytest.raises(FileNotFoundError):
+        model.load(tmp_path / "nope.json")
+
+
+def test_poisson_xgb_fit_with_early_stopping_completes(tmp_path: Path) -> None:
+    """Path early_stopping_val: training termina e booster_ è popolato.
+
+    Task 11 (training pipeline) userà early stopping con walk-forward CV;
+    questo test pinia che il branch eval_set non rompa l'API.
+    """
+    df = _sample_processed()
+    df_big = pd.concat([df] * 100, ignore_index=True)
+    df_val = pd.concat([df] * 20, ignore_index=True)
+    model = PoissonXGBModel({"n_estimators": 50}).fit(
+        df_big, early_stopping_val=df_val, early_stopping_rounds=5
+    )
+    assert model.booster_ is not None
+    lam_h, lam_a = model.predict_lambda(df)
+    assert lam_h.shape == (len(df),)
+    assert (lam_h > 0).all()
+    assert (lam_a > 0).all()
+
+
 def test_poisson_xgb_json_serialization_roundtrip(tmp_path: Path) -> None:
     """Serializzazione JSON nativa: dopo save/load predict_lambda è identico."""
     df = _sample_processed()
