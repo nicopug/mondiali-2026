@@ -1258,33 +1258,46 @@ from mondiali.model.dixon_coles import (
 
 
 def test_joint_matrix_shape_and_sums_close_to_one() -> None:
-    """Shape (MAX_GOALS+1, MAX_GOALS+1), sum ≈ 1 (≥ 0.999 con lam ≤ 3)."""
+    """Shape (MAX_GOALS+1, MAX_GOALS+1), sum ≈ 1 (≥ 0.99 con lam ≤ 3)."""
     m = joint_matrix(lam_home=1.5, lam_away=1.2)
     assert m.shape == (MAX_GOALS + 1, MAX_GOALS + 1)
     assert 0.99 <= m.sum() <= 1.0
 
 
-def test_joint_matrix_is_independent_product_of_marginals() -> None:
-    """P(i,j) = P(i|lam_h) * P(j|lam_a) (pre-correzione DC)."""
+def test_joint_matrix_is_outer_product_of_truncated_pmfs() -> None:
+    """P(i,j) = pmf_h[i] * pmf_a[j] (pre-correzione DC).
+
+    Test la struttura outer-product senza passare dai marginali: il
+    troncamento a MAX_GOALS=10 lascia ~8e-6 di coda Poisson per λ=2,
+    incompatibile con un confronto sui marginali a rtol=1e-10. La forma
+    outer è invece esatta per costruzione, qui pinzata a precisione macchina.
+    """
     m = joint_matrix(lam_home=1.0, lam_away=2.0)
-    # marginale i: sum su j
-    marginal_home = m.sum(axis=1)
-    expected_home = poisson.pmf(np.arange(MAX_GOALS + 1), mu=1.0)
-    np.testing.assert_allclose(marginal_home, expected_home, rtol=1e-10)
-    marginal_away = m.sum(axis=0)
-    expected_away = poisson.pmf(np.arange(MAX_GOALS + 1), mu=2.0)
-    np.testing.assert_allclose(marginal_away, expected_away, rtol=1e-10)
+    pmf_h = poisson.pmf(np.arange(MAX_GOALS + 1), mu=1.0)
+    pmf_a = poisson.pmf(np.arange(MAX_GOALS + 1), mu=2.0)
+    expected = np.outer(pmf_h, pmf_a)
+    np.testing.assert_allclose(m, expected, rtol=1e-12)
+
+
+def test_task9_stubs_raise_not_implemented() -> None:
+    """dixon_coles_correct + estimate_rho_mle sono stub Task 9: pinia il
+    contratto, evita silent no-op se Task 9 viene mergiato senza implementarli.
+    """
+    with pytest.raises(NotImplementedError, match="Task 9"):
+        dixon_coles_correct(np.zeros((11, 11)), 1.0, 1.0, -0.1)
+    with pytest.raises(NotImplementedError, match="Task 9"):
+        estimate_rho_mle(object())
 ```
 
 - [ ] **Step 8.2: Verifica fallimento**
 
 ```bash
-.venv/Scripts/pytest tests/test_dixon_coles.py -v -k "joint"
+.venv/Scripts/pytest tests/test_dixon_coles.py -v
 ```
 
-Expected: 2 fail ImportError.
+Expected: collection error (ImportError su `MAX_GOALS`/`joint_matrix`/stub).
 
-- [ ] **Step 8.3: Implementa `joint_matrix`**
+- [ ] **Step 8.3: Implementa `joint_matrix` + stub Task 9**
 
 Crea `src/mondiali/model/dixon_coles.py`:
 
@@ -1302,7 +1315,6 @@ Pipeline di inference (spec §6.2):
 from __future__ import annotations
 
 import numpy as np
-from scipy.optimize import minimize_scalar
 from scipy.stats import poisson
 
 MAX_GOALS: int = 10
@@ -1313,15 +1325,28 @@ def joint_matrix(lam_home: float, lam_away: float) -> np.ndarray:
     pmf_h = poisson.pmf(np.arange(MAX_GOALS + 1), mu=lam_home)
     pmf_a = poisson.pmf(np.arange(MAX_GOALS + 1), mu=lam_away)
     return np.outer(pmf_h, pmf_a)
+
+
+# Task 9 stubs - full implementation in next task
+def dixon_coles_correct(
+    matrix: np.ndarray, lam_home: float, lam_away: float, rho: float
+) -> np.ndarray:
+    raise NotImplementedError("dixon_coles_correct: implemented in Task 9")
+
+
+def estimate_rho_mle(matches: object) -> float:
+    raise NotImplementedError("estimate_rho_mle: implemented in Task 9")
 ```
+
+NOTA: `scipy.optimize.minimize_scalar` arriva in Task 9, non importarlo qui (ruff F401). Gli stub sono necessari perché il test top-level importa `dixon_coles_correct` ed `estimate_rho_mle`: senza stub la collection di pytest fallisce. Lo stub `estimate_rho_mle(matches: object)` evita il `# type: ignore[no-untyped-def]`.
 
 - [ ] **Step 8.4: Verifica verde**
 
 ```bash
-.venv/Scripts/pytest tests/test_dixon_coles.py -v -k "joint"
+.venv/Scripts/pytest tests/test_dixon_coles.py -v -W error
 ```
 
-Expected: 2 passed.
+Expected: 3 passed (i 2 joint + lo stub-contract test).
 
 ---
 
