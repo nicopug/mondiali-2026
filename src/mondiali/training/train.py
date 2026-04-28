@@ -17,10 +17,11 @@ import numpy as np
 import pandas as pd
 import structlog
 
+from mondiali.model.calibration import IsotonicCalibrator1X2
 from mondiali.model.dixon_coles import dixon_coles_correct, estimate_rho_mle, joint_matrix
 from mondiali.model.markets import prob_1x2
 from mondiali.model.poisson_xgb import PoissonXGBModel
-from mondiali.training.evaluate import log_loss_1x2
+from mondiali.training.evaluate import brier_score_1x2, compute_outcomes, log_loss_1x2
 
 log = structlog.get_logger(__name__)
 
@@ -108,4 +109,98 @@ def train_tier1_pipeline(
         "lambda_away_mean": float(lam_a_va.mean()),
         "n_train": len(train),
         "n_val": len(val),
+    }
+
+
+def train_tier2_pipeline(
+    parquet_path: Path,
+    *,
+    train_start: str = "2002-01-01",
+    train_end: str = "2016-12-31",
+    val_es_start: str = "2017-01-01",
+    val_es_end: str = "2017-12-31",
+    val_calib_start: str = "2018-01-01",
+    val_calib_end: str = "2018-12-31",
+    val_gate_start: str = "2019-01-01",
+    val_gate_end: str = "2022-06-30",
+    early_stopping_rounds: int = 50,
+    model_params: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Pipeline Tier 2 con 4-way split + isotonic calibration.
+
+    Returns:
+        dict con: model, rho, calibrator, val_log_loss_raw, val_log_loss_calib,
+        brier_before, brier_after, n_train, n_val_es, n_val_calib, n_val_gate.
+    """
+    df = pd.read_parquet(parquet_path)
+    df["date"] = pd.to_datetime(df["date"])
+    df = df.dropna(subset=["days_rest_home", "days_rest_away"]).copy()
+
+    train = df[(df["date"] >= train_start) & (df["date"] <= train_end)].reset_index(drop=True)
+    val_es = df[(df["date"] >= val_es_start) & (df["date"] <= val_es_end)].reset_index(drop=True)
+    val_calib = df[
+        (df["date"] >= val_calib_start) & (df["date"] <= val_calib_end)
+    ].reset_index(drop=True)
+    val_gate = df[
+        (df["date"] >= val_gate_start) & (df["date"] <= val_gate_end)
+    ].reset_index(drop=True)
+
+    log.info(
+        "tier2 pipeline start",
+        n_train=len(train),
+        n_val_es=len(val_es),
+        n_val_calib=len(val_calib),
+        n_val_gate=len(val_gate),
+    )
+
+    model = PoissonXGBModel(params=model_params)
+    model.fit(
+        train,
+        early_stopping_val=val_es,
+        early_stopping_rounds=early_stopping_rounds,
+    )
+
+    lam_h_tr, lam_a_tr = model.predict_lambda(train)
+    rho = estimate_rho_mle(
+        lam_h_tr,
+        lam_a_tr,
+        train["home_score"].to_numpy(),
+        train["away_score"].to_numpy(),
+    )
+    log.info("rho estimated", rho=rho)
+
+    lam_h_cal, lam_a_cal = model.predict_lambda(val_calib)
+    raw_probs_calib = _compute_1x2_probs(lam_h_cal, lam_a_cal, rho=rho)
+    outcomes_calib = compute_outcomes(val_calib)
+    calibrator = IsotonicCalibrator1X2().fit(raw_probs_calib, outcomes_calib)
+
+    lam_h_ga, lam_a_ga = model.predict_lambda(val_gate)
+    raw_probs_gate = _compute_1x2_probs(lam_h_ga, lam_a_ga, rho=rho)
+    cal_probs_gate = calibrator.predict(raw_probs_gate)
+
+    val_log_loss_raw = log_loss_1x2(val_gate, raw_probs_gate)
+    val_log_loss_calib = log_loss_1x2(val_gate, cal_probs_gate)
+    brier_before = brier_score_1x2(val_gate, raw_probs_gate)
+    brier_after = brier_score_1x2(val_gate, cal_probs_gate)
+
+    log.info(
+        "tier2 validation",
+        log_loss_raw=val_log_loss_raw,
+        log_loss_calib=val_log_loss_calib,
+        brier_before=brier_before,
+        brier_after=brier_after,
+    )
+
+    return {
+        "model": model,
+        "rho": rho,
+        "calibrator": calibrator,
+        "val_log_loss_raw": val_log_loss_raw,
+        "val_log_loss_calib": val_log_loss_calib,
+        "brier_before": brier_before,
+        "brier_after": brier_after,
+        "n_train": len(train),
+        "n_val_es": len(val_es),
+        "n_val_calib": len(val_calib),
+        "n_val_gate": len(val_gate),
     }
