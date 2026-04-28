@@ -6,6 +6,8 @@ Comandi disponibili in STEP 1:
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import structlog
@@ -16,7 +18,7 @@ from mondiali.data.ingestion import build_processed_matches, download_internatio
 from mondiali.model.elo_logistic import EloLogisticBaseline
 from mondiali.training.baseline_prior import PriorBaseline
 from mondiali.training.evaluate import log_loss_1x2
-from mondiali.training.train import train_tier1_pipeline
+from mondiali.training.train import train_tier1_pipeline, train_tier2_pipeline
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
 log = structlog.get_logger(__name__)
@@ -130,6 +132,48 @@ def train_tier1(
         out = CONFIG.models_dir / "tier1" / "xgb_poisson.json"
         result["model"].save(out)
         typer.echo(f"Model saved: {out}")
+
+
+@app.command(name="train-tier2")
+def train_tier2(
+    train_start: str = typer.Option("2002-01-01"),
+    train_end: str = typer.Option("2016-12-31"),
+    val_es_start: str = typer.Option("2017-01-01"),
+    val_es_end: str = typer.Option("2017-12-31"),
+    val_calib_start: str = typer.Option("2018-01-01"),
+    val_calib_end: str = typer.Option("2018-12-31"),
+    val_gate_start: str = typer.Option("2019-01-01"),
+    val_gate_end: str = typer.Option("2022-06-30"),
+    save_model: str = typer.Option("", "--save-model", help="Path JSON dove salvare il modello"),
+    save_calibrator: str = typer.Option(
+        "", "--save-calibrator", help="Path JSON dove salvare il calibrator"
+    ),
+) -> None:
+    """Addestra Tier 2 (XGBoost Poisson + DC + isotonic calibration)."""
+    parquet = CONFIG.data_processed / "matches.parquet"
+    result = train_tier2_pipeline(
+        parquet_path=parquet,
+        train_start=train_start, train_end=train_end,
+        val_es_start=val_es_start, val_es_end=val_es_end,
+        val_calib_start=val_calib_start, val_calib_end=val_calib_end,
+        val_gate_start=val_gate_start, val_gate_end=val_gate_end,
+    )
+    typer.echo(
+        f"Splits: train={result['n_train']} val_es={result['n_val_es']} "
+        f"val_calib={result['n_val_calib']} val_gate={result['n_val_gate']}"
+    )
+    typer.echo(f"Dixon-Coles rho: {result['rho']:.4f}")
+    typer.echo(f"Tier 2 RAW   log-loss: {result['val_log_loss_raw']:.4f}")
+    typer.echo(f"Tier 2 CALIB log-loss: {result['val_log_loss_calib']:.4f}")
+    typer.echo(f"Brier before: {result['brier_before']:.4f}")
+    typer.echo(f"Brier after:  {result['brier_after']:.4f}")
+
+    if save_model:
+        result["model"].save(Path(save_model))
+        typer.echo(f"Model saved: {save_model}")
+    if save_calibrator:
+        result["calibrator"].save(Path(save_calibrator))
+        typer.echo(f"Calibrator saved: {save_calibrator}")
 
 
 if __name__ == "__main__":
