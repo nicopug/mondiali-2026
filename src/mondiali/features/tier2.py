@@ -52,7 +52,7 @@ def _team_long_form(matches: pd.DataFrame) -> pd.DataFrame:
         np.where(long["gf"] == long["ga"], 1.0, 0.0),
     )
     long["gd"] = long["gf"] - long["ga"]
-    return long.sort_values(["team", "date"], kind="mergesort").reset_index(drop=True)
+    return long.sort_values(["team", "date", "match_idx"], kind="mergesort").reset_index(drop=True)
 
 
 def _rolling(grouped: Any, col: str, n: int, agg: str) -> pd.Series:

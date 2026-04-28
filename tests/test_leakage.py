@@ -103,3 +103,44 @@ def test_days_rest_is_strictly_pre_match() -> None:
             assert pd.isna(obs)
         else:
             assert obs == pytest.approx(exp)
+
+
+def test_tier2_form_5_is_strictly_pre_match() -> None:
+    """Per ogni match, home_form_5 e away_form_5 devono usare solo match
+    strettamente precedenti. Ri-simuliamo con la stessa logica del builder.
+    """
+    df = _load_processed()
+    if df is None:
+        pytest.skip("data/processed/matches.parquet not found")
+
+    if "home_form_5" not in df.columns:
+        pytest.skip("Tier 2 features not present in matches.parquet — run build_processed first")
+
+    df_sorted = df.sort_values("date", kind="mergesort").reset_index(drop=True)
+
+    history: dict[str, list[float]] = {}
+    expected_home_form: list[float] = []
+    expected_away_form: list[float] = []
+    for row in df_sorted.itertuples(index=False):
+        h_hist = history.get(row.home_team, [])
+        a_hist = history.get(row.away_team, [])
+        expected_home_form.append(sum(h_hist[-5:]) if h_hist else float("nan"))
+        expected_away_form.append(sum(a_hist[-5:]) if a_hist else float("nan"))
+        draw = row.home_score == row.away_score
+        h_pts = 3.0 if row.home_score > row.away_score else (1.0 if draw else 0.0)
+        a_pts = 3.0 if row.away_score > row.home_score else (1.0 if draw else 0.0)
+        history.setdefault(row.home_team, []).append(h_pts)
+        history.setdefault(row.away_team, []).append(a_pts)
+
+    h_obs = df_sorted["home_form_5"].tolist()
+    a_obs = df_sorted["away_form_5"].tolist()
+    for obs, exp in zip(h_obs, expected_home_form, strict=True):
+        if pd.isna(exp):
+            assert pd.isna(obs)
+        else:
+            assert obs == pytest.approx(exp)
+    for obs, exp in zip(a_obs, expected_away_form, strict=True):
+        if pd.isna(exp):
+            assert pd.isna(obs)
+        else:
+            assert obs == pytest.approx(exp)

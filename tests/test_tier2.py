@@ -88,3 +88,27 @@ def test_tier2_strict_anteriority() -> None:
     # 2° match (B vs A, 2020-02-01): A è away, ha giocato 1 match prima (W 2-0).
     # Atteso: solo W → form=3, NON 4.
     assert out.iloc[1]["away_form_5"] == 3.0
+
+
+def test_tier2_same_date_ordering() -> None:
+    """Two matches for the same team on the same date must use match_idx as tiebreaker:
+    the second match's rolling window must include the first match's result.
+    """
+    rows = [
+        ("2020-01-01", "A", "B", 2, 0, 1500.0, 1400.0),  # idx 0: A wins → A=3 pts
+        ("2020-01-01", "A", "C", 1, 1, 1500.0, 1450.0),  # idx 1: A draws → A had 1 prior match
+    ]
+    df = pd.DataFrame(
+        rows,
+        columns=[
+            "date", "home_team", "away_team",
+            "home_score", "away_score",
+            "home_elo_before", "away_elo_before",
+        ],
+    )
+    df["date"] = pd.to_datetime(df["date"])
+    out = add_tier2_features(df)
+    # On idx 1, A has played idx 0 (W=3 pts) before
+    assert out.iloc[1]["home_form_5"] == 3.0
+    # idx 0: A has no prior matches → NaN
+    assert pd.isna(out.iloc[0]["home_form_5"])
