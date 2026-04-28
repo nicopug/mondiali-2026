@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from mondiali.model.calibration import IsotonicCalibrator1X2
 
@@ -62,3 +63,24 @@ def test_calibrator_idempotent_on_perfectly_calibrated() -> None:
     cal = IsotonicCalibrator1X2().fit(probs, outcomes)
     out = cal.predict(probs)
     np.testing.assert_allclose(out.mean(axis=0), [0.5, 0.25, 0.25], atol=0.05)
+
+
+def test_calibrator_json_roundtrip(tmp_path) -> None:
+    """save -> load -> predict identico al bit."""
+    rng = np.random.default_rng(42)
+    n = 500
+    raw = rng.dirichlet([1, 1, 1], size=n)
+    outcomes = rng.choice([0, 1, 2], size=n, p=[0.5, 0.25, 0.25])
+    cal = IsotonicCalibrator1X2().fit(raw, outcomes)
+
+    path = tmp_path / "calibrator.json"
+    cal.save(path)
+
+    loaded = IsotonicCalibrator1X2.load(path)
+    assert loaded.predict(raw) == pytest.approx(cal.predict(raw), abs=0.0)
+
+
+def test_calibrator_load_missing_file_raises(tmp_path) -> None:
+    """load di file inesistente solleva FileNotFoundError."""
+    with pytest.raises(FileNotFoundError):
+        IsotonicCalibrator1X2.load(tmp_path / "nonexistent.json")

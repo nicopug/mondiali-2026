@@ -5,11 +5,43 @@ riga per riga.
 """
 from __future__ import annotations
 
+import json
+from pathlib import Path
+from typing import Any
+
 import numpy as np
 import structlog
+from scipy.interpolate import interp1d
 from sklearn.isotonic import IsotonicRegression
 
 log = structlog.get_logger(__name__)
+
+
+def _serialize_iso(iso: IsotonicRegression) -> dict[str, Any]:
+    return {
+        "X_thresholds": iso.X_thresholds_.tolist(),
+        "y_thresholds": iso.y_thresholds_.tolist(),
+        "X_min": float(iso.X_min_),
+        "X_max": float(iso.X_max_),
+        "increasing": bool(iso.increasing_),
+    }
+
+
+def _deserialize_iso(data: dict[str, Any]) -> IsotonicRegression:
+    iso = IsotonicRegression(out_of_bounds="clip", y_min=0.0, y_max=1.0)
+    iso.X_thresholds_ = np.asarray(data["X_thresholds"], dtype=float)
+    iso.y_thresholds_ = np.asarray(data["y_thresholds"], dtype=float)
+    iso.X_min_ = float(data["X_min"])
+    iso.X_max_ = float(data["X_max"])
+    iso.increasing_ = bool(data["increasing"])
+    iso.f_ = interp1d(
+        iso.X_thresholds_,
+        iso.y_thresholds_,
+        kind="linear",
+        bounds_error=False,
+        fill_value=(iso.y_thresholds_[0], iso.y_thresholds_[-1]),
+    )
+    return iso
 
 
 class IsotonicCalibrator1X2:
@@ -55,3 +87,28 @@ class IsotonicCalibrator1X2:
         s_safe = out.sum(axis=1, keepdims=True)
         out = out / s_safe
         return np.asarray(out)
+
+    def save(self, path: Path) -> None:
+        if self.iso_home_ is None or self.iso_draw_ is None or self.iso_away_ is None:
+            raise RuntimeError("Calibrator must be fit() before save()")
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        data = {
+            "version": 1,
+            "iso_home": _serialize_iso(self.iso_home_),
+            "iso_draw": _serialize_iso(self.iso_draw_),
+            "iso_away": _serialize_iso(self.iso_away_),
+        }
+        path.write_text(json.dumps(data, indent=2))
+
+    @classmethod
+    def load(cls, path: Path) -> IsotonicCalibrator1X2:
+        path = Path(path)
+        if not path.exists():
+            raise FileNotFoundError(path)
+        data = json.loads(path.read_text())
+        cal = cls()
+        cal.iso_home_ = _deserialize_iso(data["iso_home"])
+        cal.iso_draw_ = _deserialize_iso(data["iso_draw"])
+        cal.iso_away_ = _deserialize_iso(data["iso_away"])
+        return cal
