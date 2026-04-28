@@ -29,6 +29,16 @@ SYMMETRIC_FEATURES: list[str] = [
     "competition_importance",
     "team_days_rest",
     "opponent_days_rest",
+    "team_form_5",
+    "opponent_form_5",
+    "team_gd_5",
+    "opponent_gd_5",
+    "team_goals_scored_5",
+    "opponent_goals_scored_5",
+    "team_goals_conceded_5",
+    "opponent_goals_conceded_5",
+    "team_avg_opp_elo_5",
+    "opponent_avg_opp_elo_5",
 ]
 
 DEFAULT_PARAMS: dict[str, Any] = {
@@ -47,7 +57,7 @@ DEFAULT_PARAMS: dict[str, Any] = {
 }
 
 
-def build_symmetric_rows(matches: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+def build_symmetric_rows(matches: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:  # noqa: PLR0915
     """Ritorna (X, y) dove per ogni match crea 2 righe consecutive.
 
     Ordine righe: [match0_home, match0_away, match1_home, match1_away, ...].
@@ -68,6 +78,17 @@ def build_symmetric_rows(matches: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]
     h_goals = matches["home_score"].to_numpy(dtype=float)
     a_goals = matches["away_score"].to_numpy(dtype=float)
 
+    home_form = matches["home_form_5"].to_numpy(dtype=float)
+    away_form = matches["away_form_5"].to_numpy(dtype=float)
+    home_gd = matches["home_gd_5"].to_numpy(dtype=float)
+    away_gd = matches["away_gd_5"].to_numpy(dtype=float)
+    home_gs = matches["home_goals_scored_5"].to_numpy(dtype=float)
+    away_gs = matches["away_goals_scored_5"].to_numpy(dtype=float)
+    home_gc = matches["home_goals_conceded_5"].to_numpy(dtype=float)
+    away_gc = matches["away_goals_conceded_5"].to_numpy(dtype=float)
+    home_ope = matches["home_avg_opp_elo_5"].to_numpy(dtype=float)
+    away_ope = matches["away_avg_opp_elo_5"].to_numpy(dtype=float)
+
     # Home-perspective rows (indici pari 0, 2, 4, ...)
     X[0::2, 0] = home_elo                               # team_elo
     X[0::2, 1] = away_elo                               # opponent_elo
@@ -77,6 +98,16 @@ def build_symmetric_rows(matches: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]
     X[0::2, 5] = comp_imp                               # competition_importance
     X[0::2, 6] = rest_h                                 # team_days_rest
     X[0::2, 7] = rest_a                                 # opponent_days_rest
+    X[0::2, 8] = home_form                              # team_form_5
+    X[0::2, 9] = away_form                              # opponent_form_5
+    X[0::2, 10] = home_gd                               # team_gd_5
+    X[0::2, 11] = away_gd                               # opponent_gd_5
+    X[0::2, 12] = home_gs                               # team_goals_scored_5
+    X[0::2, 13] = away_gs                               # opponent_goals_scored_5
+    X[0::2, 14] = home_gc                               # team_goals_conceded_5
+    X[0::2, 15] = away_gc                               # opponent_goals_conceded_5
+    X[0::2, 16] = home_ope                              # team_avg_opp_elo_5
+    X[0::2, 17] = away_ope                              # opponent_avg_opp_elo_5
     y[0::2] = h_goals
 
     # Away-perspective rows (indici dispari 1, 3, 5, ...)
@@ -88,6 +119,16 @@ def build_symmetric_rows(matches: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]
     X[1::2, 5] = comp_imp
     X[1::2, 6] = rest_a
     X[1::2, 7] = rest_h
+    X[1::2, 8] = away_form
+    X[1::2, 9] = home_form
+    X[1::2, 10] = away_gd
+    X[1::2, 11] = home_gd
+    X[1::2, 12] = away_gs
+    X[1::2, 13] = home_gs
+    X[1::2, 14] = away_gc
+    X[1::2, 15] = home_gc
+    X[1::2, 16] = away_ope
+    X[1::2, 17] = home_ope
     y[1::2] = a_goals
 
     return X, y

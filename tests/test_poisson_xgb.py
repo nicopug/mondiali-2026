@@ -31,6 +31,16 @@ def _sample_processed() -> pd.DataFrame:
             "days_rest_home": [5.0, 30.0],
             "days_rest_away": [7.0, 9.0],
             "days_rest_diff": [-2.0, 21.0],
+            "home_form_5": [10.0, 8.0],
+            "away_form_5": [6.0, 11.0],
+            "home_gd_5": [3.0, 1.0],
+            "away_gd_5": [-1.0, 4.0],
+            "home_goals_scored_5": [2.0, 1.5],
+            "away_goals_scored_5": [1.2, 2.2],
+            "home_goals_conceded_5": [0.8, 1.0],
+            "away_goals_conceded_5": [1.6, 0.6],
+            "home_avg_opp_elo_5": [1500.0, 1480.0],
+            "away_avg_opp_elo_5": [1520.0, 1510.0],
         }
     )
 
@@ -107,6 +117,16 @@ def test_symmetric_features_column_order_is_pinned() -> None:
         "competition_importance",
         "team_days_rest",
         "opponent_days_rest",
+        "team_form_5",
+        "opponent_form_5",
+        "team_gd_5",
+        "opponent_gd_5",
+        "team_goals_scored_5",
+        "opponent_goals_scored_5",
+        "team_goals_conceded_5",
+        "opponent_goals_conceded_5",
+        "team_avg_opp_elo_5",
+        "opponent_avg_opp_elo_5",
     ]
 
 
@@ -208,3 +228,45 @@ def test_poisson_xgb_json_serialization_roundtrip(tmp_path: Path) -> None:
     lam_h_after, lam_a_after = loaded.predict_lambda(df)
     np.testing.assert_allclose(lam_h_before, lam_h_after, rtol=1e-6)
     np.testing.assert_allclose(lam_a_before, lam_a_after, rtol=1e-6)
+
+
+def test_symmetric_features_has_18_columns_including_tier2() -> None:
+    """SYMMETRIC_FEATURES include 8 Tier 0+1 + 10 Tier 2."""
+    assert len(SYMMETRIC_FEATURES) == 18
+    expected_tier2 = [
+        "team_form_5", "opponent_form_5",
+        "team_gd_5", "opponent_gd_5",
+        "team_goals_scored_5", "opponent_goals_scored_5",
+        "team_goals_conceded_5", "opponent_goals_conceded_5",
+        "team_avg_opp_elo_5", "opponent_avg_opp_elo_5",
+    ]
+    for col in expected_tier2:
+        assert col in SYMMETRIC_FEATURES
+
+
+def test_build_symmetric_rows_with_tier2_columns() -> None:
+    """build_symmetric_rows popola le 10 Tier 2 con simmetria home/away."""
+    df = pd.DataFrame({
+        "home_team": ["A"], "away_team": ["B"],
+        "date": pd.to_datetime(["2020-01-01"]),
+        "home_score": [2], "away_score": [1],
+        "neutral": [False],
+        "home_elo_before": [1500.0], "away_elo_before": [1400.0],
+        "competition_importance": [3],
+        "days_rest_home": [10.0], "days_rest_away": [20.0],
+        "home_form_5": [12.0], "away_form_5": [4.0],
+        "home_gd_5": [5.0], "away_gd_5": [-3.0],
+        "home_goals_scored_5": [2.5], "away_goals_scored_5": [0.8],
+        "home_goals_conceded_5": [0.5], "away_goals_conceded_5": [1.6],
+        "home_avg_opp_elo_5": [1450.0], "away_avg_opp_elo_5": [1480.0],
+    })
+    X, y = build_symmetric_rows(df)  # noqa: N806
+    assert X.shape == (2, 18)
+    tf_idx = SYMMETRIC_FEATURES.index("team_form_5")
+    of_idx = SYMMETRIC_FEATURES.index("opponent_form_5")
+    # Home perspective: team=A, opponent=B
+    assert X[0, tf_idx] == 12.0
+    assert X[0, of_idx] == 4.0
+    # Away perspective: team=B, opponent=A
+    assert X[1, tf_idx] == 4.0
+    assert X[1, of_idx] == 12.0
