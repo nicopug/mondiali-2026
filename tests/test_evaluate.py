@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from mondiali.training.evaluate import compute_outcomes, log_loss_1x2
+from mondiali.training.evaluate import brier_score_1x2, compute_outcomes, log_loss_1x2
 
 
 def test_compute_outcomes_encodes_1x2_correctly() -> None:
@@ -44,3 +44,37 @@ def test_log_loss_raises_on_shape_mismatch() -> None:
     probs = np.array([[0.5, 0.3, 0.2]])
     with pytest.raises(ValueError, match="shape"):
         log_loss_1x2(df, probs)
+
+
+def _matches(outcomes: list[int]) -> pd.DataFrame:
+    """Crea matches sintetici con outcome desiderato.
+
+    outcome 0 = home win, 1 = draw, 2 = away win.
+    """
+    rows = []
+    for o in outcomes:
+        if o == 0:
+            rows.append({"home_score": 1, "away_score": 0})
+        elif o == 1:
+            rows.append({"home_score": 1, "away_score": 1})
+        else:
+            rows.append({"home_score": 0, "away_score": 1})
+    return pd.DataFrame(rows)
+
+
+def test_brier_score_perfect_predictions_zero() -> None:
+    """Brier = 0 con predizioni perfette."""
+    matches = _matches([0, 1, 2])
+    probs = np.array([
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0],
+    ])
+    assert brier_score_1x2(matches, probs) == pytest.approx(0.0, abs=1e-10)
+
+
+def test_brier_score_uniform_is_known_value() -> None:
+    """Predizioni uniformi (1/3, 1/3, 1/3) -> Brier per riga = 2/3, media = 2/3."""
+    matches = _matches([0, 1, 2])
+    probs = np.full((3, 3), 1.0 / 3.0)
+    assert brier_score_1x2(matches, probs) == pytest.approx(2.0 / 3.0, abs=1e-10)
