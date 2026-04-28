@@ -8,11 +8,15 @@ Anti-leakage: pandas rolling con closed='left' garantisce strict-anteriority.
 """
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import pandas as pd
 import structlog
 
 log = structlog.get_logger(__name__)
+
+WINDOW_N = 5
 
 TIER2_COLUMNS: list[str] = [
     "home_form_5", "away_form_5",
@@ -51,20 +55,25 @@ def _team_long_form(matches: pd.DataFrame) -> pd.DataFrame:
     return long.sort_values(["team", "date"], kind="mergesort").reset_index(drop=True)
 
 
-def _rolling(grouped: pd.api.typing.DataFrameGroupBy, col: str, n: int, agg: str) -> pd.Series:
+def _rolling(grouped: Any, col: str, n: int, agg: str) -> pd.Series:
     rolled = grouped[col].rolling(window=n, min_periods=1, closed="left")
-    series = rolled.sum() if agg == "sum" else rolled.mean()
+    if agg == "sum":
+        series = rolled.sum()
+    elif agg == "mean":
+        series = rolled.mean()
+    else:
+        raise ValueError(f"unknown agg: {agg}")
     return series.reset_index(level=0, drop=True)
 
 
-def add_tier2_features(matches: pd.DataFrame, *, n: int = 5) -> pd.DataFrame:
+def add_tier2_features(matches: pd.DataFrame) -> pd.DataFrame:
     long = _team_long_form(matches)
     grouped = long.groupby("team", sort=False)
-    long["form_n"] = _rolling(grouped, "points", n, "sum")
-    long["gd_n"] = _rolling(grouped, "gd", n, "sum")
-    long["gf_mean_n"] = _rolling(grouped, "gf", n, "mean")
-    long["ga_mean_n"] = _rolling(grouped, "ga", n, "mean")
-    long["opp_elo_mean_n"] = _rolling(grouped, "opp_elo", n, "mean")
+    long["form_n"] = _rolling(grouped, "points", WINDOW_N, "sum")
+    long["gd_n"] = _rolling(grouped, "gd", WINDOW_N, "sum")
+    long["gf_mean_n"] = _rolling(grouped, "gf", WINDOW_N, "mean")
+    long["ga_mean_n"] = _rolling(grouped, "ga", WINDOW_N, "mean")
+    long["opp_elo_mean_n"] = _rolling(grouped, "opp_elo", WINDOW_N, "mean")
 
     home_view = long[long["role"] == "home"].set_index("match_idx")
     away_view = long[long["role"] == "away"].set_index("match_idx")
@@ -83,5 +92,5 @@ def add_tier2_features(matches: pd.DataFrame, *, n: int = 5) -> pd.DataFrame:
     result["away_goals_conceded_5"] = away_view["ga_mean_n"].reindex(idx).to_numpy()
     result["away_avg_opp_elo_5"] = away_view["opp_elo_mean_n"].reindex(idx).to_numpy()
 
-    log.info("added tier2 features", rows=len(result), n=n)
+    log.info("added tier2 features", rows=len(result))
     return result
