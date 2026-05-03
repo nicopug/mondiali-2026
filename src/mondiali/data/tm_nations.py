@@ -6,6 +6,15 @@ URL pattern: https://www.transfermarkt.com/{slug}/startseite/verein/{id}.
 Il `team_name` (chiave del dict) deve matchare ESATTAMENTE come appare nelle
 colonne `home_team` / `away_team` di `matches.parquet`. Usa la stringa
 canonica del dataset martj42/international_results.
+
+⚠ BOOTSTRAP STATUS: most tm_ids in this table are unverified placeholders.
+The 11 entries marked `# FIXME: verify` are the most obvious cases (collisions
+or known mismatches), but the broader collision analysis shows ~63 of 78 entries
+share IDs with at least one other nation, which is implausible if all IDs were
+real Transfermarkt club identifiers. The first real run of the Wayback scraper
+(Task 7) will surface 404s and slug-mismatch errors that drive the verification
+pass. Until `_BOOTSTRAP_VERIFIED` is flipped to True, treat any tm_id-derived
+URL as suspect.
 """
 from __future__ import annotations
 
@@ -92,8 +101,14 @@ NATION_TM_IDS: dict[str, tuple[str, int]] = {
     "Azerbaijan": ("aserbaidschan", 3576),
 }
 
+# Set to True only after every entry has been confirmed against a live
+# Transfermarkt page. Task 7 is responsible for flipping this. While False,
+# downstream code may emit a warning at import.
+_BOOTSTRAP_VERIFIED: bool = False
+
 # Sanity invariants
 assert all(isinstance(v, tuple) and len(v) == 2 for v in NATION_TM_IDS.values()), \
     "NATION_TM_IDS values must be (slug: str, id: int) tuples"
-assert all(isinstance(slug, str) and isinstance(tid, int) for slug, tid in NATION_TM_IDS.values())
+assert all(isinstance(slug, str) and isinstance(tid, int) for slug, tid in NATION_TM_IDS.values()), \
+    "All values must be (str, int) tuples — check for quoted tm_id"
 assert len(NATION_TM_IDS) >= 60, f"expected >=60 nations, got {len(NATION_TM_IDS)}"
