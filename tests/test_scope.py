@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import pandas as pd
-import pytest
 
 from mondiali.data.scope import WC2026_QUALIFIED, compute_tier3_scope
 
