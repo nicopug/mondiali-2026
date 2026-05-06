@@ -40,11 +40,11 @@ class SquadValue:
 # US/EN format: "€80.00m", "€500k", "€1.50m"
 _VALUE_RE_US = re.compile(r"€\s*([\d.,]+)\s*([mk]?)", re.IGNORECASE)
 # DE format: "20,50 Mill. €", "5,00 Tsd. €", "1,50 Mio. €", "75 Th. €"
-_VALUE_RE_DE = re.compile(r"([\d.,]+)\s*(Mio|Mill|Tsd|Th)\.?\s*€", re.IGNORECASE)
+_VALUE_RE_DE = re.compile(r"([\d.,]+)\s+(Mio|Mill|Tsd|Th)\.?\s*€", re.IGNORECASE)
 
 
 _DE_MULTIPLIERS = {"mio": 1_000_000.0, "mill": 1_000_000.0, "tsd": 1_000.0, "th": 1_000.0}
-_US_MULTIPLIERS = {"m": 1_000_000.0, "k": 1_000.0, "": 1.0}
+_US_MULTIPLIERS = {"m": 1_000_000.0, "k": 1_000.0}
 
 
 def _parse_value_eur(raw: str) -> float | None:
@@ -63,13 +63,21 @@ def _parse_value_eur(raw: str) -> float | None:
     # DE format first (more specific: requires unit word after number)
     m = _VALUE_RE_DE.search(s)
     if m:
-        num = float(m.group(1).replace(".", "").replace(",", "."))
+        try:
+            num = float(m.group(1).replace(".", "").replace(",", "."))
+        except ValueError:
+            log.warning("tm_parse_value_malformed", raw=s)
+            return None
         return num * _DE_MULTIPLIERS[m.group(2).lower()]
 
     # US format
     m = _VALUE_RE_US.search(s)
     if m:
-        num = float(m.group(1).replace(",", "."))
+        try:
+            num = float(m.group(1).replace(",", "."))
+        except ValueError:
+            log.warning("tm_parse_value_malformed", raw=s)
+            return None
         return num * _US_MULTIPLIERS.get(m.group(2).lower(), 1.0)
     return None
 
@@ -78,7 +86,7 @@ def _parse_squad_value(html: str) -> SquadValue | None:
     """Parse pagina TM rosa nazionale. None se la pagina non contiene rosa.
 
     Cerca `table.items` (TM ≥2018) o `table#kader` (legacy), estrae celle
-    `td.rechts.hauptlink`, parsa ogni valore via `_parse_value_eur`,
+    `td.rechts.hauptlink` (TM moderno) o `td.rechts` come fallback, parsa ogni valore via `_parse_value_eur`,
     scarta None/<=0. Top-11 = somma dei 11 valori più alti.
     """
     soup = BeautifulSoup(html, "html.parser")

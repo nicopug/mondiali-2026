@@ -23,6 +23,7 @@ FIXTURES_DIR = Path(__file__).parent / "fixtures"
     ("5,00 Tsd. €", 5_000.0),
     ("1,50 Mio. €", 1_500_000.0),
     ("80,00 Mill. €", 80_000_000.0),
+    ("75 Th. €", 75_000.0),
     # Sentinels
     ("€-", None),
     ("-", None),
@@ -32,25 +33,20 @@ def test_parse_value_eur(input_str, expected):
     assert _parse_value_eur(input_str) == expected
 
 
-@pytest.mark.parametrize("fixture_name", [
-    "tm_italy_2014.html",
-    "tm_italy_2018.html",
-    "tm_italy_2022.html",
+@pytest.mark.parametrize("fixture_name, expected_n, expected_total, expected_top11", [
+    ("tm_italy_2014.html", 24, 313_575_000.0, 218_500_000.0),
+    ("tm_italy_2018.html", 26, 664_000_000.0, 416_000_000.0),
+    ("tm_italy_2022.html", 29, 646_300_000.0, 439_000_000.0),
 ])
-def test_parse_squad_value_real_fixtures(fixture_name):
-    """Le 3 fixture HTML reali devono parsare correttamente.
-
-    Invariants:
-    - n_players >= 20 (rosa nazionale tipica 23-30 nomi)
-    - total_value_eur > 50M (Italia non è mai sotto 50M nei tre anni testati)
-    - top11_value_eur > 0 e <= total_value_eur
-    """
+def test_parse_squad_value_real_fixtures(fixture_name, expected_n, expected_total, expected_top11):
+    """Le 3 fixture HTML reali devono parsare ai valori esatti attesi."""
     html = (FIXTURES_DIR / fixture_name).read_text(encoding="utf-8")
     result = _parse_squad_value(html)
     assert result is not None
-    assert result.n_players >= 20
-    assert result.total_value_eur > 50_000_000.0
-    assert 0 < result.top11_value_eur <= result.total_value_eur
+    assert result.n_players == expected_n
+    assert result.total_value_eur == pytest.approx(expected_total, rel=1e-6)
+    assert result.top11_value_eur == pytest.approx(expected_top11, rel=1e-6)
+    assert result.top11_value_eur <= result.total_value_eur
 
 
 def test_parse_squad_value_empty_html_returns_none():
