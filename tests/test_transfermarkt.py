@@ -370,9 +370,10 @@ def test_scrape_all_writes_parquet(tmp_path, monkeypatch):
     )
     assert out.exists()
     df = pd.read_parquet(out)
-    assert len(df) >= 1
+    assert len(df) == 2  # both 2018 and 2019 reuse the same mocked CDX/Wayback response
     assert set(df.columns) >= {
         "nation", "year", "snapshot_date", "total_value_eur",
         "top11_value_eur", "n_players", "source_url",
     }
     assert df.iloc[0]["nation"] == "Italy"
+    assert pd.api.types.is_datetime64_any_dtype(df["snapshot_date"])

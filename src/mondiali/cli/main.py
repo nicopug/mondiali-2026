@@ -188,10 +188,32 @@ def tm_scrape(
         help="Path JSON con lista nazioni; se vuoto, computa da matches.parquet",
     ),
 ) -> None:
-    """Scrape Transfermarkt market values via Wayback Machine per Tier 3."""
+    """Scrape Transfermarkt market values via Wayback Machine per Tier 3.
+
+    Quando ``--scope-file`` è omesso, computa lo scope da ``matches.parquet`` e lo
+    salva in ``data/processed/tier3_scope.json`` come effetto collaterale.
+    """
+    if start_year > end_year:
+        typer.echo(
+            f"start-year ({start_year}) deve essere <= end-year ({end_year})",
+            err=True,
+        )
+        raise typer.Exit(1)
+
     if scope_file:
-        with Path(scope_file).open() as f:
-            scope = json.load(f)
+        p = Path(scope_file)
+        if not p.exists():
+            typer.echo(f"scope-file not found: {p}", err=True)
+            raise typer.Exit(1)
+        try:
+            with p.open() as f:
+                scope = json.load(f)
+        except json.JSONDecodeError as exc:
+            typer.echo(f"scope-file is not valid JSON: {exc}", err=True)
+            raise typer.Exit(1)
+        if not isinstance(scope, list) or not all(isinstance(n, str) for n in scope):
+            typer.echo("scope-file must contain a JSON array of strings", err=True)
+            raise typer.Exit(1)
     else:
         parquet = CONFIG.data_processed / "matches.parquet"
         if not parquet.exists():

@@ -343,21 +343,29 @@ def scrape_all(
         "scrape_complete",
         n_target=n_target, n_filled=n_filled, coverage=f"{coverage:.1%}",
     )
-    if coverage < 0.6:
+    if n_target > 0 and coverage < 0.6:
         log.warning("coverage_below_60pct", coverage=coverage)
 
-    df = pd.DataFrame([
-        {
-            "nation": r.nation,
-            "year": r.year,
-            "snapshot_date": r.snapshot_date,
-            "total_value_eur": r.total_value_eur,
-            "top11_value_eur": r.top11_value_eur,
-            "n_players": r.n_players,
-            "source_url": r.source_url,
-        }
-        for r in records
-    ])
+    columns = [
+        "nation", "year", "snapshot_date", "total_value_eur",
+        "top11_value_eur", "n_players", "source_url",
+    ]
+    df = pd.DataFrame(
+        [
+            {
+                "nation": r.nation,
+                "year": r.year,
+                "snapshot_date": r.snapshot_date,
+                "total_value_eur": r.total_value_eur,
+                "top11_value_eur": r.top11_value_eur,
+                "n_players": r.n_players,
+                "source_url": r.source_url,
+            }
+            for r in records
+        ],
+        columns=columns,
+    )
+    df["snapshot_date"] = pd.to_datetime(df["snapshot_date"])
     output_path.parent.mkdir(parents=True, exist_ok=True)
     df.to_parquet(output_path, index=False)
     log.info("wrote_snapshots_parquet", path=str(output_path), rows=len(df))
