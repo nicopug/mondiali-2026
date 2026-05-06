@@ -188,6 +188,19 @@ def _wayback_url(row: CDXRow) -> str:
     return f"{WAYBACK_FETCH_BASE}/{row.timestamp}/{row.original}"
 
 
+@dataclass(frozen=True)
+class SnapshotRecord:
+    """Una riga di snapshots.parquet (popolata in Task 7)."""
+
+    nation: str
+    year: int
+    snapshot_date: date
+    total_value_eur: float
+    top11_value_eur: float
+    n_players: int
+    source_url: str
+
+
 def _fetch_snapshot_html(row: CDXRow, cache_dir: Path) -> str | None:
     """Fetch HTML da Wayback con cache + rate limiter + retry exp-backoff.
 
@@ -220,5 +233,45 @@ def _fetch_snapshot_html(row: CDXRow, cache_dir: Path) -> str | None:
             log.warning("wayback exception", error=str(e), attempt=attempt)
         if attempt < _RETRY_ATTEMPTS - 1:
             time.sleep(_RETRY_BACKOFF_BASE * (2 ** attempt))
+
+    return None
+
+
+def _best_snapshot_for_year(
+    target_url: str, year: int, cache_dir: Path
+) -> tuple[date, SquadValue, str] | None:
+    """Adaptive fallback per ``(nation_url, year)``.
+
+    Tre livelli:
+    1. CDX query [year-05-01, year-09-01] (vicino a 1 luglio)
+    2. CDX query [year-01-01, year-12-31] (tutto l'anno)
+    3. CDX query [year-1-07-01, year-06-30] (anno precedente)
+
+    Per ogni livello sceglie lo snapshot più vicino al target (1 luglio),
+    fetch HTML, parsa rosa. Se parse fallisce, prova la prossima riga
+    (massimo 3 tentativi per livello). Se tutti i livelli falliscono → None.
+    """
+    target = date(year, 7, 1)
+
+    levels = [
+        (date(year, 5, 1), date(year, 9, 1)),
+        (date(year, 1, 1), date(year, 12, 31)),
+        (date(year - 1, 7, 1), date(year, 6, 30)),
+    ]
+
+    for from_d, to_d in levels:
+        rows = _query_cdx(target_url, from_d, to_d, limit=20)
+        if not rows:
+            continue
+        rows_sorted = sorted(rows, key=lambda r: abs((r.snapshot_date - target).days))
+
+        for row in rows_sorted[:3]:
+            html = _fetch_snapshot_html(row, cache_dir)
+            if html is None:
+                continue
+            parsed = _parse_squad_value(html)
+            if parsed is None:
+                continue
+            return (row.snapshot_date, parsed, _wayback_url(row))
 
     return None

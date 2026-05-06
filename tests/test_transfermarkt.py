@@ -7,8 +7,12 @@ from pathlib import Path
 import pytest
 import responses
 
+from datetime import date as Date
+
 from mondiali.data.transfermarkt import (
     CDXRow,
+    SnapshotRecord,
+    _best_snapshot_for_year,
     _fetch_snapshot_html,
     _parse_squad_value,
     _parse_value_eur,
@@ -213,3 +217,56 @@ def test_fetch_snapshot_html_returns_none_on_5xx(tmp_path, monkeypatch):
     html = _fetch_snapshot_html(row, tmp_path)
     assert html is None
     assert len(responses.calls) == 3
+
+
+@responses.activate
+def test_best_snapshot_for_year_level1_success(tmp_path, monkeypatch):
+    """Trova snapshot al primo livello (target ±60 giorni)."""
+    monkeypatch.setattr("mondiali.data.transfermarkt.RATE_LIMIT_SECONDS", 0.0)
+    responses.add(
+        responses.GET,
+        "https://web.archive.org/cdx/search/cdx",
+        json=[
+            ["urlkey", "timestamp", "original", "mimetype", "statuscode", "digest", "length"],
+            [
+                "com,transfermarkt)/italien/startseite/verein/3376",
+                "20180815000000",
+                "https://www.transfermarkt.com/italien/startseite/verein/3376",
+                "text/html", "200", "ABC", "12345",
+            ],
+        ],
+    )
+    fixture = (FIXTURES_DIR / "tm_italy_2018.html").read_text(encoding="utf-8")
+    responses.add(
+        responses.GET,
+        "https://web.archive.org/web/20180815000000/https://www.transfermarkt.com/italien/startseite/verein/3376",
+        body=fixture,
+        status=200,
+    )
+    snap = _best_snapshot_for_year(
+        "https://www.transfermarkt.com/italien/startseite/verein/3376",
+        2018,
+        tmp_path,
+    )
+    assert snap is not None
+    snap_date, parsed, source = snap
+    assert snap_date == Date(2018, 8, 15)
+    assert parsed.total_value_eur > 0
+    assert source.startswith("https://web.archive.org/web/20180815000000/")
+
+
+@responses.activate
+def test_best_snapshot_for_year_returns_none_when_all_levels_empty(tmp_path, monkeypatch):
+    """Tutti e 3 i livelli ritornano CDX vuoto → None."""
+    monkeypatch.setattr("mondiali.data.transfermarkt.RATE_LIMIT_SECONDS", 0.0)
+    responses.add(
+        responses.GET,
+        "https://web.archive.org/cdx/search/cdx",
+        json=[["urlkey", "timestamp", "original", "mimetype", "statuscode", "digest", "length"]],
+    )
+    snap = _best_snapshot_for_year(
+        "https://www.transfermarkt.com/eritrea/startseite/verein/9999",
+        2018,
+        tmp_path,
+    )
+    assert snap is None
