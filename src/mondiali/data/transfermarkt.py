@@ -17,6 +17,7 @@ import time
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
+from urllib.parse import urlparse
 
 import requests
 import structlog
@@ -169,18 +170,17 @@ def _query_cdx(target_url: str, from_date: date, to_date: date, limit: int = 50)
 
 
 _RETRY_ATTEMPTS = 3
-_RETRY_BACKOFF_BASE = 2.0  # exp: 2s, 4s, 8s
+_RETRY_BACKOFF_BASE = 2.0  # exp backoff between retries: 2s, 4s
 
 
 def _slug_from_url(url: str) -> str:
     """Estrai lo slug nazionale dall'URL TM.
 
     Pattern: ``https://www.transfermarkt.com/{slug}/startseite/verein/{id}``.
+    Robusto a trailing slash, query params, fragment, e variazioni di subdomain.
     """
-    parts = url.rstrip("/").split("/")
-    if len(parts) >= 4:
-        return parts[3]
-    return "unknown"
+    path_parts = [p for p in urlparse(url).path.split("/") if p]
+    return path_parts[0] if path_parts else "unknown"
 
 
 def _wayback_url(row: CDXRow) -> str:

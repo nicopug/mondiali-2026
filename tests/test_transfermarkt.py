@@ -7,8 +7,14 @@ from pathlib import Path
 import pytest
 import responses
 
-from mondiali.data.transfermarkt import CDXRow, _parse_squad_value, _parse_value_eur, _query_cdx
-from mondiali.data.transfermarkt import _fetch_snapshot_html, _wayback_url
+from mondiali.data.transfermarkt import (
+    CDXRow,
+    _fetch_snapshot_html,
+    _parse_squad_value,
+    _parse_value_eur,
+    _query_cdx,
+    _wayback_url,
+)
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -190,7 +196,7 @@ def test_fetch_snapshot_html_writes_cache(tmp_path, monkeypatch):
 
 @responses.activate
 def test_fetch_snapshot_html_returns_none_on_5xx(tmp_path, monkeypatch):
-    """HTTP 500 → ritry exp-backoff esauriti → None."""
+    """HTTP 500 → retry exp-backoff esauriti → None."""
     monkeypatch.setattr("mondiali.data.transfermarkt.RATE_LIMIT_SECONDS", 0.0)
     monkeypatch.setattr("mondiali.data.transfermarkt._RETRY_BACKOFF_BASE", 0.0)
     responses.add(
@@ -206,3 +212,4 @@ def test_fetch_snapshot_html_returns_none_on_5xx(tmp_path, monkeypatch):
     )
     html = _fetch_snapshot_html(row, tmp_path)
     assert html is None
+    assert len(responses.calls) == 3
