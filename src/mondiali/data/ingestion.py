@@ -7,9 +7,11 @@ import pandas as pd
 import requests
 import structlog
 
+from mondiali.config import CONFIG
 from mondiali.features.elo import EloSystem
 from mondiali.features.tier1 import add_tier1_features
 from mondiali.features.tier2 import add_tier2_features
+from mondiali.features.tier3 import TIER3_COLUMNS, add_tier3_features
 
 log = structlog.get_logger(__name__)
 
@@ -90,6 +92,17 @@ def build_processed_matches(raw_csv: Path, out_path: Path) -> Path:
     df = elo.build_history(df)
     df = add_tier1_features(df)
     df = add_tier2_features(df)
+
+    snapshots_path = CONFIG.data_raw / "transfermarkt" / "snapshots.parquet"
+    if snapshots_path.exists():
+        snapshots = pd.read_parquet(snapshots_path)
+        snapshots["snapshot_date"] = pd.to_datetime(snapshots["snapshot_date"])
+        df = add_tier3_features(df, snapshots)
+        log.info("tier3_features_loaded", path=str(snapshots_path))
+    else:
+        log.info("tier3_snapshots_missing_filling_nan", expected=str(snapshots_path))
+        for col in TIER3_COLUMNS:
+            df[col] = pd.NA
 
     df["match_id"] = (
         df["date"].dt.strftime("%Y%m%d")

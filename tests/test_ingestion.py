@@ -173,3 +173,31 @@ def test_build_processed_matches_includes_tier1_features(tmp_path: Path) -> None
     assert df.iloc[1]["competition_importance"] == 1
     # days_rest_home per Francia nella seconda riga = 53 giorni
     assert df.iloc[1]["days_rest_home"] == 53.0
+
+
+from mondiali.features.tier3 import TIER3_COLUMNS
+
+
+def test_build_processed_matches_without_tier3_snapshots(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Senza snapshots.parquet, le 6 colonne TIER3 esistono come NaN."""
+    # Punta CONFIG.data_raw a un path vuoto, in modo che snapshots.parquet
+    # non esista.
+    fake_raw_dir = tmp_path / "fake_raw"
+    fake_raw_dir.mkdir()
+    monkeypatch.setattr("mondiali.data.ingestion.CONFIG.data_raw", fake_raw_dir)
+
+    raw_csv = tmp_path / "results.csv"
+    raw_csv.write_text(
+        "date,home_team,away_team,home_score,away_score,tournament,city,country,neutral\n"
+        "2018-07-15,France,Croatia,4,2,FIFA World Cup,Moscow,Russia,TRUE\n"
+        "2018-09-06,France,Germany,0,0,UEFA Nations League,Munich,Germany,FALSE\n"
+    )
+    out_path = tmp_path / "matches.parquet"
+    build_processed_matches(raw_csv, out_path)
+
+    df = pd.read_parquet(out_path)
+    for col in TIER3_COLUMNS:
+        assert col in df.columns
+        assert df[col].isna().all()
