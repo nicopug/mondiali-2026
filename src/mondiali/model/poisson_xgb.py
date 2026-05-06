@@ -39,6 +39,12 @@ SYMMETRIC_FEATURES: list[str] = [
     "opponent_goals_conceded_5",
     "team_avg_opp_elo_5",
     "opponent_avg_opp_elo_5",
+    "team_market_value_total",
+    "opponent_market_value_total",
+    "team_market_value_top11",
+    "opponent_market_value_top11",
+    "team_tm_age_days",
+    "opponent_tm_age_days",
 ]
 
 DEFAULT_PARAMS: dict[str, Any] = {
@@ -88,6 +94,12 @@ def build_symmetric_rows(matches: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]
     away_gc = matches["away_goals_conceded_5"].to_numpy(dtype=float)
     home_ope = matches["home_avg_opp_elo_5"].to_numpy(dtype=float)
     away_ope = matches["away_avg_opp_elo_5"].to_numpy(dtype=float)
+    home_mv_total = matches["home_market_value_total"].to_numpy(dtype=float)
+    away_mv_total = matches["away_market_value_total"].to_numpy(dtype=float)
+    home_mv_top11 = matches["home_market_value_top11"].to_numpy(dtype=float)
+    away_mv_top11 = matches["away_market_value_top11"].to_numpy(dtype=float)
+    home_tm_age = matches["home_tm_age_days"].to_numpy(dtype=float)
+    away_tm_age = matches["away_tm_age_days"].to_numpy(dtype=float)
 
     # Home-perspective rows (indici pari 0, 2, 4, ...)
     X[0::2, 0] = home_elo                               # team_elo
@@ -108,6 +120,12 @@ def build_symmetric_rows(matches: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]
     X[0::2, 15] = away_gc                               # opponent_goals_conceded_5
     X[0::2, 16] = home_ope                              # team_avg_opp_elo_5
     X[0::2, 17] = away_ope                              # opponent_avg_opp_elo_5
+    X[0::2, 18] = home_mv_total                         # team_market_value_total
+    X[0::2, 19] = away_mv_total                         # opponent_market_value_total
+    X[0::2, 20] = home_mv_top11                         # team_market_value_top11
+    X[0::2, 21] = away_mv_top11                         # opponent_market_value_top11
+    X[0::2, 22] = home_tm_age                           # team_tm_age_days
+    X[0::2, 23] = away_tm_age                           # opponent_tm_age_days
     y[0::2] = h_goals
 
     # Away-perspective rows (indici dispari 1, 3, 5, ...)
@@ -129,6 +147,12 @@ def build_symmetric_rows(matches: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]
     X[1::2, 15] = home_gc
     X[1::2, 16] = away_ope
     X[1::2, 17] = home_ope
+    X[1::2, 18] = away_mv_total
+    X[1::2, 19] = home_mv_total
+    X[1::2, 20] = away_mv_top11
+    X[1::2, 21] = home_mv_top11
+    X[1::2, 22] = away_tm_age
+    X[1::2, 23] = home_tm_age
     y[1::2] = a_goals
 
     return X, y

@@ -41,6 +41,12 @@ def _sample_processed() -> pd.DataFrame:
             "away_goals_conceded_5": [1.6, 0.6],
             "home_avg_opp_elo_5": [1500.0, 1480.0],
             "away_avg_opp_elo_5": [1520.0, 1510.0],
+            "home_market_value_total": [np.nan, np.nan],
+            "away_market_value_total": [np.nan, np.nan],
+            "home_market_value_top11": [np.nan, np.nan],
+            "away_market_value_top11": [np.nan, np.nan],
+            "home_tm_age_days": [np.nan, np.nan],
+            "away_tm_age_days": [np.nan, np.nan],
         }
     )
 
@@ -127,6 +133,12 @@ def test_symmetric_features_column_order_is_pinned() -> None:
         "opponent_goals_conceded_5",
         "team_avg_opp_elo_5",
         "opponent_avg_opp_elo_5",
+        "team_market_value_total",
+        "opponent_market_value_total",
+        "team_market_value_top11",
+        "opponent_market_value_top11",
+        "team_tm_age_days",
+        "opponent_tm_age_days",
     ]
 
 
@@ -231,8 +243,8 @@ def test_poisson_xgb_json_serialization_roundtrip(tmp_path: Path) -> None:
 
 
 def test_symmetric_features_has_18_columns_including_tier2() -> None:
-    """SYMMETRIC_FEATURES include 8 Tier 0+1 + 10 Tier 2."""
-    assert len(SYMMETRIC_FEATURES) == 18
+    """SYMMETRIC_FEATURES include 8 Tier 0+1 + 10 Tier 2 + 6 Tier 3 = 24."""
+    assert len(SYMMETRIC_FEATURES) == 24
     expected_tier2 = [
         "team_form_5", "opponent_form_5",
         "team_gd_5", "opponent_gd_5",
@@ -259,9 +271,12 @@ def test_build_symmetric_rows_with_tier2_columns() -> None:
         "home_goals_scored_5": [2.5], "away_goals_scored_5": [0.8],
         "home_goals_conceded_5": [0.5], "away_goals_conceded_5": [1.6],
         "home_avg_opp_elo_5": [1450.0], "away_avg_opp_elo_5": [1480.0],
+        "home_market_value_total": [np.nan], "away_market_value_total": [np.nan],
+        "home_market_value_top11": [np.nan], "away_market_value_top11": [np.nan],
+        "home_tm_age_days": [np.nan], "away_tm_age_days": [np.nan],
     })
     X, y = build_symmetric_rows(df)  # noqa: N806
-    assert X.shape == (2, 18)
+    assert X.shape == (2, 24)
     tf_idx = SYMMETRIC_FEATURES.index("team_form_5")
     of_idx = SYMMETRIC_FEATURES.index("opponent_form_5")
     # Home perspective: team=A, opponent=B
@@ -270,3 +285,69 @@ def test_build_symmetric_rows_with_tier2_columns() -> None:
     # Away perspective: team=B, opponent=A
     assert X[1, tf_idx] == 4.0
     assert X[1, of_idx] == 12.0
+
+
+def test_symmetric_features_count_is_24() -> None:
+    """Tier 3 enabled — feature count = 24 simmetriche."""
+    assert len(SYMMETRIC_FEATURES) == 24
+    assert "team_market_value_total" in SYMMETRIC_FEATURES
+    assert "opponent_market_value_total" in SYMMETRIC_FEATURES
+    assert "team_market_value_top11" in SYMMETRIC_FEATURES
+    assert "opponent_market_value_top11" in SYMMETRIC_FEATURES
+    assert "team_tm_age_days" in SYMMETRIC_FEATURES
+    assert "opponent_tm_age_days" in SYMMETRIC_FEATURES
+
+
+def test_build_symmetric_rows_handles_nan_tier3() -> None:
+    """matches con NaN su tier3 → output X ha NaN nelle col 18-23 (XGB ok)."""
+    matches = pd.DataFrame({
+        "home_team": ["A"], "away_team": ["B"],
+        "home_score": [1], "away_score": [0],
+        "home_elo_before": [1900.0], "away_elo_before": [1800.0],
+        "neutral": [False],
+        "competition_importance": [50.0],
+        "days_rest_home": [3.0], "days_rest_away": [3.0],
+        "home_form_5": [10.0], "away_form_5": [9.0],
+        "home_gd_5": [3.0], "away_gd_5": [-1.0],
+        "home_goals_scored_5": [1.5], "away_goals_scored_5": [1.2],
+        "home_goals_conceded_5": [0.8], "away_goals_conceded_5": [1.0],
+        "home_avg_opp_elo_5": [1700.0], "away_avg_opp_elo_5": [1750.0],
+        "home_market_value_total": [np.nan], "away_market_value_total": [np.nan],
+        "home_market_value_top11": [np.nan], "away_market_value_top11": [np.nan],
+        "home_tm_age_days": [np.nan], "away_tm_age_days": [np.nan],
+    })
+    X, y = build_symmetric_rows(matches)
+    assert X.shape == (2, 24)
+    assert np.isnan(X[0, 18])
+    assert np.isnan(X[1, 18])
+
+
+def test_build_symmetric_rows_tier3_symmetry() -> None:
+    """Sanity: in away-perspective row, team/opponent tier3 sono scambiati."""
+    matches = pd.DataFrame({
+        "home_team": ["A"], "away_team": ["B"],
+        "home_score": [1], "away_score": [0],
+        "home_elo_before": [1900.0], "away_elo_before": [1800.0],
+        "neutral": [False],
+        "competition_importance": [50.0],
+        "days_rest_home": [3.0], "days_rest_away": [3.0],
+        "home_form_5": [10.0], "away_form_5": [9.0],
+        "home_gd_5": [3.0], "away_gd_5": [-1.0],
+        "home_goals_scored_5": [1.5], "away_goals_scored_5": [1.2],
+        "home_goals_conceded_5": [0.8], "away_goals_conceded_5": [1.0],
+        "home_avg_opp_elo_5": [1700.0], "away_avg_opp_elo_5": [1750.0],
+        "home_market_value_total": [500_000_000.0], "away_market_value_total": [800_000_000.0],
+        "home_market_value_top11": [400_000_000.0], "away_market_value_top11": [700_000_000.0],
+        "home_tm_age_days": [30.0], "away_tm_age_days": [60.0],
+    })
+    X, _ = build_symmetric_rows(matches)
+    # Home perspective (row 0): team=home, opp=away
+    assert X[0, 18] == 500_000_000.0  # team_market_value_total = home
+    assert X[0, 19] == 800_000_000.0  # opponent_market_value_total = away
+    assert X[0, 22] == 30.0  # team_tm_age_days = home
+    assert X[0, 23] == 60.0  # opponent_tm_age_days = away
+    # Away perspective (row 1): team=away, opp=home (swap)
+    assert X[1, 18] == 800_000_000.0
+    assert X[1, 19] == 500_000_000.0
+    assert X[1, 22] == 60.0
+    assert X[1, 23] == 30.0
