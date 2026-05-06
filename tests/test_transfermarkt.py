@@ -6,6 +6,7 @@ from pathlib import Path
 
 import json
 
+import pandas as pd
 import pytest
 import responses
 
@@ -17,6 +18,7 @@ from mondiali.data.transfermarkt import (
     _parse_value_eur,
     _query_cdx,
     _wayback_url,
+    scrape_all,
 )
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
@@ -332,3 +334,45 @@ def test_best_snapshot_for_year_falls_through_to_level2(tmp_path, monkeypatch):
     assert snap is not None
     snap_date, _, _ = snap
     assert snap_date == date(2018, 3, 15)
+
+
+@responses.activate
+def test_scrape_all_writes_parquet(tmp_path, monkeypatch):
+    """End-to-end: scope di 1 nazionale × 2 anni → snapshots.parquet con righe."""
+    monkeypatch.setattr("mondiali.data.transfermarkt.RATE_LIMIT_SECONDS", 0.0)
+    fixture = (FIXTURES_DIR / "tm_italy_2018.html").read_text(encoding="utf-8")
+
+    responses.add(
+        responses.GET,
+        "https://web.archive.org/cdx/search/cdx",
+        json=[
+            ["urlkey", "timestamp", "original", "mimetype", "statuscode", "digest", "length"],
+            [
+                "com,transfermarkt)/italien/startseite/verein/3376",
+                "20180701000000",
+                "https://www.transfermarkt.com/italien/startseite/verein/3376",
+                "text/html", "200", "ABC", "12345",
+            ],
+        ],
+    )
+    responses.add(
+        responses.GET,
+        "https://web.archive.org/web/20180701000000/https://www.transfermarkt.com/italien/startseite/verein/3376",
+        body=fixture,
+        status=200,
+    )
+    out = tmp_path / "snapshots.parquet"
+    scrape_all(
+        scope=["Italy"],
+        years=[2018, 2019],
+        cache_dir=tmp_path / "cache",
+        output_path=out,
+    )
+    assert out.exists()
+    df = pd.read_parquet(out)
+    assert len(df) >= 1
+    assert set(df.columns) >= {
+        "nation", "year", "snapshot_date", "total_value_eur",
+        "top11_value_eur", "n_players", "source_url",
+    }
+    assert df.iloc[0]["nation"] == "Italy"

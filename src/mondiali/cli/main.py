@@ -6,6 +6,7 @@ Comandi disponibili in STEP 1:
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -15,6 +16,8 @@ import typer
 
 from mondiali.config import CONFIG
 from mondiali.data.ingestion import build_processed_matches, download_international_results
+from mondiali.data.scope import compute_tier3_scope
+from mondiali.data.transfermarkt import scrape_all
 from mondiali.model.elo_logistic import EloLogisticBaseline
 from mondiali.training.baseline_prior import PriorBaseline
 from mondiali.training.evaluate import log_loss_1x2
@@ -174,6 +177,44 @@ def train_tier2(
     if save_calibrator:
         result["calibrator"].save(Path(save_calibrator))
         typer.echo(f"Calibrator saved: {save_calibrator}")
+
+
+@app.command(name="tm-scrape")
+def tm_scrape(
+    start_year: int = typer.Option(2014, help="Anno iniziale snapshot"),
+    end_year: int = typer.Option(2025, help="Anno finale snapshot incluso"),
+    scope_file: str = typer.Option(
+        "", "--scope-file",
+        help="Path JSON con lista nazioni; se vuoto, computa da matches.parquet",
+    ),
+) -> None:
+    """Scrape Transfermarkt market values via Wayback Machine per Tier 3."""
+    if scope_file:
+        with Path(scope_file).open() as f:
+            scope = json.load(f)
+    else:
+        parquet = CONFIG.data_processed / "matches.parquet"
+        if not parquet.exists():
+            typer.echo("matches.parquet non trovato — esegui `mondiali ingest` prima", err=True)
+            raise typer.Exit(1)
+        df = pd.read_parquet(parquet)
+        df["date"] = pd.to_datetime(df["date"])
+        scope = compute_tier3_scope(df)
+        scope_out = CONFIG.data_processed / "tier3_scope.json"
+        scope_out.parent.mkdir(parents=True, exist_ok=True)
+        with scope_out.open("w") as f:
+            json.dump(scope, f, indent=2)
+        typer.echo(f"Computed scope: {len(scope)} nations → {scope_out}")
+
+    cache_dir = CONFIG.data_raw / "transfermarkt" / "cache"
+    output_path = CONFIG.data_raw / "transfermarkt" / "snapshots.parquet"
+    years = list(range(start_year, end_year + 1))
+    typer.echo(
+        f"Scraping {len(scope)} nations × {len(years)} years = "
+        f"{len(scope) * len(years)} target snapshots"
+    )
+    scrape_all(scope, years, cache_dir, output_path)
+    typer.echo(f"Done. Output: {output_path}")
 
 
 if __name__ == "__main__":

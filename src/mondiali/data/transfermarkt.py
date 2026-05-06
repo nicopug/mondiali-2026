@@ -19,9 +19,12 @@ from datetime import date
 from pathlib import Path
 from urllib.parse import urlparse
 
+import pandas as pd
 import requests
 import structlog
 from bs4 import BeautifulSoup
+
+from mondiali.data.tm_nations import NATION_TM_IDS
 
 log = structlog.get_logger(__name__)
 
@@ -238,6 +241,21 @@ def _fetch_snapshot_html(row: CDXRow, cache_dir: Path) -> str | None:
     return None
 
 
+TRANSFERMARKT_URL_TEMPLATE = "https://www.transfermarkt.com/{slug}/startseite/verein/{tm_id}"
+
+
+def _build_target_url(nation: str) -> str | None:
+    """Da team_name (es. 'Italy') costruisci URL TM canonico.
+
+    Returns None se la nazionale non è in `NATION_TM_IDS`.
+    """
+    entry = NATION_TM_IDS.get(nation)
+    if entry is None:
+        return None
+    slug, tm_id = entry
+    return TRANSFERMARKT_URL_TEMPLATE.format(slug=slug, tm_id=tm_id)
+
+
 def _best_snapshot_for_year(
     target_url: str, year: int, cache_dir: Path
 ) -> tuple[date, SquadValue, str] | None:
@@ -276,3 +294,70 @@ def _best_snapshot_for_year(
             return (row.snapshot_date, parsed, _wayback_url(row))
 
     return None
+
+
+def scrape_all(
+    scope: list[str],
+    years: list[int],
+    cache_dir: Path,
+    output_path: Path,
+) -> None:
+    """Itera scope × years, raccoglie snapshot, scrive snapshots.parquet.
+
+    Args:
+        scope: lista nazionali (chiavi di NATION_TM_IDS)
+        years: anni 2014..2025 tipicamente
+        cache_dir: directory per HTML cache (creata se mancante)
+        output_path: path dove scrivere snapshots.parquet (parent creato se mancante)
+    """
+    records: list[SnapshotRecord] = []
+    n_target = 0
+    n_filled = 0
+
+    for nation in scope:
+        url = _build_target_url(nation)
+        if url is None:
+            log.warning("nation_not_in_lookup", nation=nation)
+            continue
+        for year in years:
+            n_target += 1
+            log.info("scraping", nation=nation, year=year)
+            result = _best_snapshot_for_year(url, year, cache_dir)
+            if result is None:
+                log.warning("no_snapshot_found", nation=nation, year=year)
+                continue
+            snap_date, parsed, source = result
+            records.append(SnapshotRecord(
+                nation=nation,
+                year=year,
+                snapshot_date=snap_date,
+                total_value_eur=parsed.total_value_eur,
+                top11_value_eur=parsed.top11_value_eur,
+                n_players=parsed.n_players,
+                source_url=source,
+            ))
+            n_filled += 1
+
+    coverage = n_filled / n_target if n_target else 0.0
+    log.info(
+        "scrape_complete",
+        n_target=n_target, n_filled=n_filled, coverage=f"{coverage:.1%}",
+    )
+    if coverage < 0.6:
+        log.warning("coverage_below_60pct", coverage=coverage)
+
+    df = pd.DataFrame([
+        {
+            "nation": r.nation,
+            "year": r.year,
+            "snapshot_date": r.snapshot_date,
+            "total_value_eur": r.total_value_eur,
+            "top11_value_eur": r.top11_value_eur,
+            "n_players": r.n_players,
+            "source_url": r.source_url,
+        }
+        for r in records
+    ])
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(output_path, index=False)
+    log.info("wrote_snapshots_parquet", path=str(output_path), rows=len(df))
