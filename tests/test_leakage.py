@@ -18,6 +18,7 @@ import pytest
 
 from mondiali.config import CONFIG
 from mondiali.features.elo import EloSystem
+from mondiali.features.tier3 import TIER3_COLUMNS, add_tier3_features
 
 
 def _load_processed() -> pd.DataFrame | None:
@@ -144,3 +145,41 @@ def test_tier2_form_5_is_strictly_pre_match() -> None:
             assert pd.isna(obs)
         else:
             assert obs == pytest.approx(exp)
+
+
+def test_tier3_market_value_strict_pre_match() -> None:
+    """Per ogni match con TM non-NaN, snapshot_date deve essere strictly < match_date.
+
+    Re-simula da snapshots.parquet via add_tier3_features (no shortcuts via parquet
+    già processato). Salta se snapshots.parquet non esiste (scraper non ancora eseguito).
+    """
+    parquet = CONFIG.data_processed / "matches.parquet"
+    snapshots_path = CONFIG.data_raw / "transfermarkt" / "snapshots.parquet"
+    if not parquet.exists() or not snapshots_path.exists():
+        pytest.skip("matches.parquet o snapshots.parquet non disponibili")
+
+    matches = pd.read_parquet(parquet)
+    matches["date"] = pd.to_datetime(matches["date"])
+    snapshots = pd.read_parquet(snapshots_path)
+    snapshots["snapshot_date"] = pd.to_datetime(snapshots["snapshot_date"])
+
+    rebuilt = add_tier3_features(
+        matches.drop(columns=TIER3_COLUMNS, errors="ignore"),
+        snapshots,
+    )
+
+    home_age = rebuilt["home_tm_age_days"].dropna()
+    away_age = rebuilt["away_tm_age_days"].dropna()
+    if len(home_age):
+        assert (home_age >= 0).all(), (
+            f"negative home_tm_age_days: {home_age[home_age < 0].head()}"
+        )
+    if len(away_age):
+        assert (away_age >= 0).all(), (
+            f"negative away_tm_age_days: {away_age[away_age < 0].head()}"
+        )
+
+    pre2014 = rebuilt[rebuilt["date"] < "2014-01-01"]
+    if len(pre2014):
+        assert pre2014["home_market_value_total"].isna().all()
+        assert pre2014["away_market_value_total"].isna().all()
