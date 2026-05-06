@@ -4,14 +4,13 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 
+import json
+
 import pytest
 import responses
 
-from datetime import date as Date
-
 from mondiali.data.transfermarkt import (
     CDXRow,
-    SnapshotRecord,
     _best_snapshot_for_year,
     _fetch_snapshot_html,
     _parse_squad_value,
@@ -234,12 +233,24 @@ def test_best_snapshot_for_year_level1_success(tmp_path, monkeypatch):
                 "https://www.transfermarkt.com/italien/startseite/verein/3376",
                 "text/html", "200", "ABC", "12345",
             ],
+            [
+                "com,transfermarkt)/italien/startseite/verein/3376",
+                "20180502000000",
+                "https://www.transfermarkt.com/italien/startseite/verein/3376",
+                "text/html", "200", "ABC", "12345",
+            ],
         ],
     )
     fixture = (FIXTURES_DIR / "tm_italy_2018.html").read_text(encoding="utf-8")
     responses.add(
         responses.GET,
         "https://web.archive.org/web/20180815000000/https://www.transfermarkt.com/italien/startseite/verein/3376",
+        body=fixture,
+        status=200,
+    )
+    responses.add(
+        responses.GET,
+        "https://web.archive.org/web/20180502000000/https://www.transfermarkt.com/italien/startseite/verein/3376",
         body=fixture,
         status=200,
     )
@@ -250,7 +261,7 @@ def test_best_snapshot_for_year_level1_success(tmp_path, monkeypatch):
     )
     assert snap is not None
     snap_date, parsed, source = snap
-    assert snap_date == Date(2018, 8, 15)
+    assert snap_date == date(2018, 8, 15)
     assert parsed.total_value_eur > 0
     assert source.startswith("https://web.archive.org/web/20180815000000/")
 
@@ -270,3 +281,54 @@ def test_best_snapshot_for_year_returns_none_when_all_levels_empty(tmp_path, mon
         tmp_path,
     )
     assert snap is None
+
+
+@responses.activate
+def test_best_snapshot_for_year_falls_through_to_level2(tmp_path, monkeypatch):
+    """Livello 1 ritorna vuoto, livello 2 trova snapshot a marzo."""
+    monkeypatch.setattr("mondiali.data.transfermarkt.RATE_LIMIT_SECONDS", 0.0)
+
+    # Use a callback so we can return different bodies based on call order.
+    cdx_responses = [
+        # level 1: empty
+        [["urlkey", "timestamp", "original", "mimetype", "statuscode", "digest", "length"]],
+        # level 2: returns one row in march (outside ±60d window)
+        [
+            ["urlkey", "timestamp", "original", "mimetype", "statuscode", "digest", "length"],
+            [
+                "com,transfermarkt)/italien/startseite/verein/3376",
+                "20180315000000",
+                "https://www.transfermarkt.com/italien/startseite/verein/3376",
+                "text/html", "200", "ABC", "12345",
+            ],
+        ],
+    ]
+
+    call_idx = {"i": 0}
+
+    def cdx_callback(request):
+        i = call_idx["i"]
+        call_idx["i"] += 1
+        return (200, {}, json.dumps(cdx_responses[min(i, len(cdx_responses) - 1)]))
+
+    responses.add_callback(
+        responses.GET,
+        "https://web.archive.org/cdx/search/cdx",
+        callback=cdx_callback,
+        content_type="application/json",
+    )
+    fixture = (FIXTURES_DIR / "tm_italy_2018.html").read_text(encoding="utf-8")
+    responses.add(
+        responses.GET,
+        "https://web.archive.org/web/20180315000000/https://www.transfermarkt.com/italien/startseite/verein/3376",
+        body=fixture,
+        status=200,
+    )
+    snap = _best_snapshot_for_year(
+        "https://www.transfermarkt.com/italien/startseite/verein/3376",
+        2018,
+        tmp_path,
+    )
+    assert snap is not None
+    snap_date, _, _ = snap
+    assert snap_date == date(2018, 3, 15)

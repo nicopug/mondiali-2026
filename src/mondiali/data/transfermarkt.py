@@ -171,6 +171,7 @@ def _query_cdx(target_url: str, from_date: date, to_date: date, limit: int = 50)
 
 _RETRY_ATTEMPTS = 3
 _RETRY_BACKOFF_BASE = 2.0  # exp backoff between retries: 2s, 4s
+_PARSE_ATTEMPTS_PER_LEVEL = 5
 
 
 def _slug_from_url(url: str) -> str:
@@ -245,18 +246,18 @@ def _best_snapshot_for_year(
     Tre livelli:
     1. CDX query [year-05-01, year-09-01] (vicino a 1 luglio)
     2. CDX query [year-01-01, year-12-31] (tutto l'anno)
-    3. CDX query [year-1-07-01, year-06-30] (anno precedente)
+    3. CDX query [year-1-07-01, year-1-12-31] (anno precedente, secondo semestre)
 
     Per ogni livello sceglie lo snapshot più vicino al target (1 luglio),
     fetch HTML, parsa rosa. Se parse fallisce, prova la prossima riga
-    (massimo 3 tentativi per livello). Se tutti i livelli falliscono → None.
+    (massimo `_PARSE_ATTEMPTS_PER_LEVEL` tentativi per livello). Se tutti i livelli falliscono → None.
     """
     target = date(year, 7, 1)
 
     levels = [
         (date(year, 5, 1), date(year, 9, 1)),
         (date(year, 1, 1), date(year, 12, 31)),
-        (date(year - 1, 7, 1), date(year, 6, 30)),
+        (date(year - 1, 7, 1), date(year - 1, 12, 31)),
     ]
 
     for from_d, to_d in levels:
@@ -265,7 +266,7 @@ def _best_snapshot_for_year(
             continue
         rows_sorted = sorted(rows, key=lambda r: abs((r.snapshot_date - target).days))
 
-        for row in rows_sorted[:3]:
+        for row in rows_sorted[:_PARSE_ATTEMPTS_PER_LEVEL]:
             html = _fetch_snapshot_html(row, cache_dir)
             if html is None:
                 continue
