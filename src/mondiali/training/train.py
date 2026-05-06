@@ -70,14 +70,6 @@ def train_tier1_pipeline(
     df = pd.read_parquet(parquet_path)
     df["date"] = pd.to_datetime(df["date"])
     df = df.dropna(subset=["days_rest_home", "days_rest_away"]).copy()  # escludi prima apparizione
-    # Tier 3 columns — NaN default per parquet generati prima del Task 8/9
-    for _col in (
-        "home_market_value_total", "away_market_value_total",
-        "home_market_value_top11", "away_market_value_top11",
-        "home_tm_age_days", "away_tm_age_days",
-    ):
-        if _col not in df.columns:
-            df[_col] = float("nan")
 
     train = df[(df["date"] >= train_start) & (df["date"] <= train_end)].reset_index(drop=True)
     val = df[(df["date"] >= val_start) & (df["date"] <= val_end)].reset_index(drop=True)
@@ -143,14 +135,6 @@ def train_tier2_pipeline(
     df = pd.read_parquet(parquet_path)
     df["date"] = pd.to_datetime(df["date"])
     df = df.dropna(subset=["days_rest_home", "days_rest_away"]).copy()
-    # Tier 3 columns — NaN default per parquet generati prima del Task 8/9
-    for _col in (
-        "home_market_value_total", "away_market_value_total",
-        "home_market_value_top11", "away_market_value_top11",
-        "home_tm_age_days", "away_tm_age_days",
-    ):
-        if _col not in df.columns:
-            df[_col] = float("nan")
 
     train = df[(df["date"] >= train_start) & (df["date"] <= train_end)].reset_index(drop=True)
     val_es = df[(df["date"] >= val_es_start) & (df["date"] <= val_es_end)].reset_index(drop=True)
