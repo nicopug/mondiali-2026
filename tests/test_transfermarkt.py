@@ -2,10 +2,61 @@
 from __future__ import annotations
 
 from datetime import date
+from pathlib import Path
 
+import pytest
 import responses
 
-from mondiali.data.transfermarkt import CDXRow, _query_cdx
+from mondiali.data.transfermarkt import CDXRow, _parse_squad_value, _parse_value_eur, _query_cdx
+
+FIXTURES_DIR = Path(__file__).parent / "fixtures"
+
+
+@pytest.mark.parametrize("input_str, expected", [
+    # US format (2022)
+    ("€80.00m", 80_000_000.0),
+    ("€500k", 500_000.0),
+    ("€1.50m", 1_500_000.0),
+    ("€999.99k", 999_990.0),
+    # German format (2014/2018)
+    ("20,50 Mill. €", 20_500_000.0),
+    ("5,00 Tsd. €", 5_000.0),
+    ("1,50 Mio. €", 1_500_000.0),
+    ("80,00 Mill. €", 80_000_000.0),
+    # Sentinels
+    ("€-", None),
+    ("-", None),
+    ("", None),
+])
+def test_parse_value_eur(input_str, expected):
+    assert _parse_value_eur(input_str) == expected
+
+
+@pytest.mark.parametrize("fixture_name", [
+    "tm_italy_2014.html",
+    "tm_italy_2018.html",
+    "tm_italy_2022.html",
+])
+def test_parse_squad_value_real_fixtures(fixture_name):
+    """Le 3 fixture HTML reali devono parsare correttamente.
+
+    Invariants:
+    - n_players >= 20 (rosa nazionale tipica 23-30 nomi)
+    - total_value_eur > 50M (Italia non è mai sotto 50M nei tre anni testati)
+    - top11_value_eur > 0 e <= total_value_eur
+    """
+    html = (FIXTURES_DIR / fixture_name).read_text(encoding="utf-8")
+    result = _parse_squad_value(html)
+    assert result is not None
+    assert result.n_players >= 20
+    assert result.total_value_eur > 50_000_000.0
+    assert 0 < result.top11_value_eur <= result.total_value_eur
+
+
+def test_parse_squad_value_empty_html_returns_none():
+    """HTML senza tabella rosa → None."""
+    result = _parse_squad_value("<html><body>404 Not Found</body></html>")
+    assert result is None
 
 
 @responses.activate
