@@ -140,3 +140,24 @@ def test_add_tier3_features_nation_not_in_snapshots():
     out = add_tier3_features(matches, snapshots)
     assert out.iloc[0]["home_market_value_total"] == 500_000_000.0
     assert pd.isna(out.iloc[0]["away_market_value_total"])
+
+
+def test_add_tier3_features_snapshot_same_day_excluded():
+    """snapshot_date == match_date NON deve leakare (strict <)."""
+    matches = _make_matches([
+        {"date": "2018-06-15", "home_team": "Italy", "away_team": "France"},
+    ])
+    snapshots = _make_snapshots([
+        {"nation": "Italy", "year": 2018, "snapshot_date": "2018-06-15",
+         "total_value_eur": 999_000_000.0, "top11_value_eur": 888_000_000.0},
+        {"nation": "Italy", "year": 2017, "snapshot_date": "2017-05-01",
+         "total_value_eur": 450_000_000.0, "top11_value_eur": 380_000_000.0},
+        {"nation": "France", "year": 2017, "snapshot_date": "2017-05-01",
+         "total_value_eur": 700_000_000.0, "top11_value_eur": 600_000_000.0},
+        {"nation": "France", "year": 2018, "snapshot_date": "2018-05-01",
+         "total_value_eur": 800_000_000.0, "top11_value_eur": 700_000_000.0},
+    ])
+    out = add_tier3_features(matches, snapshots)
+    # Same-day snapshot must be excluded; falls back to 2017-05-01
+    assert out.iloc[0]["home_market_value_total"] == 450_000_000.0
+    assert out.iloc[0]["home_tm_age_days"] == 410

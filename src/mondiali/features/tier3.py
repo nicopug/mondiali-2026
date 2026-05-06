@@ -29,40 +29,6 @@ TIER3_COLUMNS: list[str] = [
 ]
 
 
-def _build_lookup(snapshots: pd.DataFrame) -> dict[str, pd.DataFrame]:
-    """Per ogni nazionale che passa il hard floor, ritorna un DataFrame
-    ordinato asc per snapshot_date con (snapshot_date, total, top11).
-    """
-    counts = snapshots.groupby("nation").size()
-    eligible = counts[counts >= TIER3_MIN_SNAPSHOTS_PER_NATION].index
-    lookup: dict[str, pd.DataFrame] = {}
-    for nation in eligible:
-        sub = (
-            snapshots[snapshots["nation"] == nation]
-            [["snapshot_date", "total_value_eur", "top11_value_eur"]]
-            .sort_values("snapshot_date")
-            .reset_index(drop=True)
-        )
-        lookup[nation] = sub
-    return lookup
-
-
-def _lookup_strict_pre(
-    sub: pd.DataFrame, match_date: pd.Timestamp
-) -> tuple[float, float, int] | None:
-    """Trova lo snapshot più recente con `snapshot_date < match_date`.
-
-    Returns:
-        (total_eur, top11_eur, age_days) o None se nessun snapshot pre-match.
-    """
-    pre = sub[sub["snapshot_date"] < match_date]
-    if pre.empty:
-        return None
-    last = pre.iloc[-1]
-    age = (match_date - last["snapshot_date"]).days
-    return float(last["total_value_eur"]), float(last["top11_value_eur"]), age
-
-
 def add_tier3_features(matches: pd.DataFrame, snapshots: pd.DataFrame) -> pd.DataFrame:
     """Aggiungi le 6 colonne TIER3_COLUMNS a `matches`.
 
@@ -73,59 +39,68 @@ def add_tier3_features(matches: pd.DataFrame, snapshots: pd.DataFrame) -> pd.Dat
 
     Returns:
         Copia di `matches` con 6 colonne aggiuntive.
+
+    Note:
+        Implementato via ``pd.merge_asof(direction="backward",
+        allow_exact_matches=False)`` per preservare l'invariante strict-pre
+        (snapshot_date < match_date) in modo vettorizzato.
     """
     out = matches.copy()
     for col in TIER3_COLUMNS:
         out[col] = np.nan
 
-    if snapshots.empty:
-        log.info("tier3_snapshots_empty")
+    if snapshots.empty or out.empty:
+        log.info("tier3_input_empty", n_snapshots=len(snapshots), n_matches=len(out))
         return out
 
-    lookup = _build_lookup(snapshots)
-    log.info("tier3_lookup_built", n_nations_eligible=len(lookup))
+    counts = snapshots.groupby("nation").size()
+    eligible_nations = counts[counts >= TIER3_MIN_SNAPSHOTS_PER_NATION].index
+    snaps = (
+        snapshots[snapshots["nation"].isin(eligible_nations)]
+        [["nation", "snapshot_date", "total_value_eur", "top11_value_eur"]]
+        .sort_values("snapshot_date")
+        .reset_index(drop=True)
+    )
+    log.info("tier3_lookup_built", n_nations_eligible=len(eligible_nations))
+
+    if snaps.empty:
+        return out
 
     min_date = pd.Timestamp(f"{TIER3_MIN_YEAR}-01-01")
+    out_sorted_idx = out.sort_values("date").index
 
-    home_total = np.full(len(out), np.nan)
-    away_total = np.full(len(out), np.nan)
-    home_top11 = np.full(len(out), np.nan)
-    away_top11 = np.full(len(out), np.nan)
-    home_age = np.full(len(out), np.nan)
-    away_age = np.full(len(out), np.nan)
+    for side, team_col in (("home", "home_team"), ("away", "away_team")):
+        left = out.loc[out_sorted_idx, ["date", team_col]].rename(columns={team_col: "nation"})
+        merged = pd.merge_asof(
+            left,
+            snaps,
+            left_on="date",
+            right_on="snapshot_date",
+            by="nation",
+            direction="backward",
+            allow_exact_matches=False,
+        )
+        age = (merged["date"] - merged["snapshot_date"]).dt.days
+        mask = (merged["date"] >= min_date) & (age <= TIER3_MAX_AGE_DAYS) & age.notna()
 
-    dates = out["date"].to_numpy()
-    home_teams = out["home_team"].to_numpy()
-    away_teams = out["away_team"].to_numpy()
+        total = merged["total_value_eur"].where(mask)
+        top11 = merged["top11_value_eur"].where(mask)
+        age_clipped = age.where(mask)
 
-    for i in range(len(out)):
-        match_date = pd.Timestamp(dates[i])
-        if match_date < min_date:
-            continue
+        out.loc[out_sorted_idx, f"{side}_market_value_total"] = total.to_numpy()
+        out.loc[out_sorted_idx, f"{side}_market_value_top11"] = top11.to_numpy()
+        out.loc[out_sorted_idx, f"{side}_tm_age_days"] = age_clipped.to_numpy()
 
-        h = lookup.get(home_teams[i])
-        if h is not None:
-            res = _lookup_strict_pre(h, match_date)
-            if res is not None and res[2] <= TIER3_MAX_AGE_DAYS:
-                home_total[i], home_top11[i], home_age[i] = res
-
-        a = lookup.get(away_teams[i])
-        if a is not None:
-            res = _lookup_strict_pre(a, match_date)
-            if res is not None and res[2] <= TIER3_MAX_AGE_DAYS:
-                away_total[i], away_top11[i], away_age[i] = res
-
-    out["home_market_value_total"] = home_total
-    out["away_market_value_total"] = away_total
-    out["home_market_value_top11"] = home_top11
-    out["away_market_value_top11"] = away_top11
-    out["home_tm_age_days"] = home_age
-    out["away_tm_age_days"] = away_age
-
+    coverage_home = (
+        float(out["home_market_value_total"].notna().mean()) if len(out) else 0.0
+    )
+    coverage_away = (
+        float(out["away_market_value_total"].notna().mean()) if len(out) else 0.0
+    )
     log.info(
         "tier3_features_added",
         rows=len(out),
-        coverage_home=float(np.mean(~np.isnan(home_total))),
-        coverage_away=float(np.mean(~np.isnan(away_total))),
+        coverage_home=coverage_home,
+        coverage_away=coverage_away,
     )
     return out
