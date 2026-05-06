@@ -8,6 +8,7 @@ import pytest
 import responses
 
 from mondiali.data.transfermarkt import CDXRow, _parse_squad_value, _parse_value_eur, _query_cdx
+from mondiali.data.transfermarkt import _fetch_snapshot_html, _wayback_url
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -130,3 +131,78 @@ def test_query_cdx_filters_to_statuscode_200():
     _query_cdx("https://example.com", date(2018, 1, 1), date(2018, 12, 31))
     call = responses.calls[0]
     assert "filter=statuscode%3A200" in call.request.url or "filter=statuscode:200" in call.request.url
+
+
+def test_wayback_url_construction():
+    row = CDXRow(
+        urlkey="com,transfermarkt)/italien/startseite/verein/3376",
+        timestamp="20180823120000",
+        original="https://www.transfermarkt.com/italien/startseite/verein/3376",
+        mimetype="text/html",
+        statuscode="200",
+        digest="ABC",
+        length="123",
+    )
+    url = _wayback_url(row)
+    assert url == "https://web.archive.org/web/20180823120000/https://www.transfermarkt.com/italien/startseite/verein/3376"
+
+
+@responses.activate
+def test_fetch_snapshot_html_uses_cache(tmp_path, monkeypatch):
+    """Se il file è già in cache, no HTTP call. Idempotenza."""
+    monkeypatch.setattr("mondiali.data.transfermarkt.RATE_LIMIT_SECONDS", 0.0)
+    cache_file = tmp_path / "italien__20180823120000.html"
+    cache_file.write_text("<html>cached</html>", encoding="utf-8")
+
+    row = CDXRow(
+        "com,transfermarkt)/italien/startseite/verein/3376",
+        "20180823120000",
+        "https://www.transfermarkt.com/italien/startseite/verein/3376",
+        "text/html", "200", "ABC", "123",
+    )
+    html = _fetch_snapshot_html(row, tmp_path)
+    assert html == "<html>cached</html>"
+    assert len(responses.calls) == 0
+
+
+@responses.activate
+def test_fetch_snapshot_html_writes_cache(tmp_path, monkeypatch):
+    """Cache miss → fetch → write to disk."""
+    monkeypatch.setattr("mondiali.data.transfermarkt.RATE_LIMIT_SECONDS", 0.0)
+    responses.add(
+        responses.GET,
+        "https://web.archive.org/web/20180823120000/https://www.transfermarkt.com/italien/startseite/verein/3376",
+        body="<html>fetched</html>",
+        status=200,
+    )
+    row = CDXRow(
+        "com,transfermarkt)/italien/startseite/verein/3376",
+        "20180823120000",
+        "https://www.transfermarkt.com/italien/startseite/verein/3376",
+        "text/html", "200", "ABC", "123",
+    )
+    html = _fetch_snapshot_html(row, tmp_path)
+    assert html == "<html>fetched</html>"
+    expected_file = tmp_path / "italien__20180823120000.html"
+    assert expected_file.exists()
+    assert expected_file.read_text(encoding="utf-8") == "<html>fetched</html>"
+
+
+@responses.activate
+def test_fetch_snapshot_html_returns_none_on_5xx(tmp_path, monkeypatch):
+    """HTTP 500 → ritry exp-backoff esauriti → None."""
+    monkeypatch.setattr("mondiali.data.transfermarkt.RATE_LIMIT_SECONDS", 0.0)
+    monkeypatch.setattr("mondiali.data.transfermarkt._RETRY_BACKOFF_BASE", 0.0)
+    responses.add(
+        responses.GET,
+        "https://web.archive.org/web/20180823120000/https://www.transfermarkt.com/italien/startseite/verein/3376",
+        status=500,
+    )
+    row = CDXRow(
+        "com,transfermarkt)/italien/startseite/verein/3376",
+        "20180823120000",
+        "https://www.transfermarkt.com/italien/startseite/verein/3376",
+        "text/html", "200", "ABC", "123",
+    )
+    html = _fetch_snapshot_html(row, tmp_path)
+    assert html is None

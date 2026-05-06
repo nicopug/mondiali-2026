@@ -13,8 +13,10 @@ Anti-leakage: lo snapshot ha timestamp REALE Wayback (non target nominale).
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import dataclass
 from datetime import date
+from pathlib import Path
 
 import requests
 import structlog
@@ -164,3 +166,59 @@ def _query_cdx(target_url: str, from_date: date, to_date: date, limit: int = 50)
         return []  # solo header
 
     return [CDXRow(*row) for row in data[1:]]
+
+
+_RETRY_ATTEMPTS = 3
+_RETRY_BACKOFF_BASE = 2.0  # exp: 2s, 4s, 8s
+
+
+def _slug_from_url(url: str) -> str:
+    """Estrai lo slug nazionale dall'URL TM.
+
+    Pattern: ``https://www.transfermarkt.com/{slug}/startseite/verein/{id}``.
+    """
+    parts = url.rstrip("/").split("/")
+    if len(parts) >= 4:
+        return parts[3]
+    return "unknown"
+
+
+def _wayback_url(row: CDXRow) -> str:
+    """URL Wayback per fetch HTML da una CDX row."""
+    return f"{WAYBACK_FETCH_BASE}/{row.timestamp}/{row.original}"
+
+
+def _fetch_snapshot_html(row: CDXRow, cache_dir: Path) -> str | None:
+    """Fetch HTML da Wayback con cache + rate limiter + retry exp-backoff.
+
+    Cache key: ``{slug}__{timestamp}.html`` in ``cache_dir``.
+
+    Returns:
+        HTML body se 200, None se cache miss + retry exhausted oppure 4xx fatale.
+    """
+    slug = _slug_from_url(row.original)
+    cache_file = cache_dir / f"{slug}__{row.timestamp}.html"
+    if cache_file.exists():
+        return cache_file.read_text(encoding="utf-8")
+
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    url = _wayback_url(row)
+
+    for attempt in range(_RETRY_ATTEMPTS):
+        time.sleep(RATE_LIMIT_SECONDS)
+        try:
+            resp = requests.get(url, timeout=CDX_TIMEOUT_SECONDS)
+            if resp.status_code == 200:
+                html = resp.text
+                cache_file.write_text(html, encoding="utf-8")
+                return html
+            if resp.status_code in (404, 410):
+                log.warning("wayback 4xx", url=url, status=resp.status_code)
+                return None
+            log.warning("wayback non-200", url=url, status=resp.status_code, attempt=attempt)
+        except requests.RequestException as e:
+            log.warning("wayback exception", error=str(e), attempt=attempt)
+        if attempt < _RETRY_ATTEMPTS - 1:
+            time.sleep(_RETRY_BACKOFF_BASE * (2 ** attempt))
+
+    return None
