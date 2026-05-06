@@ -77,6 +77,9 @@ def build_processed_matches(raw_csv: Path, out_path: Path) -> Path:
     - Carica il raw
     - Ordina per data (già fatto da `load_international_results`)
     - Costruisce `EloSystem.build_history`
+    - Aggiunge Tier 1 features (competition_importance, days_rest_*)
+    - Aggiunge Tier 2 features (form rolling, gd, goals)
+    - Aggiunge Tier 3 features (market values, age) se snapshots.parquet presente, altrimenti pd.NA
     - Aggiunge `match_id` stabile (derivato da date+home+away)
     - Scrive `matches.parquet`
 

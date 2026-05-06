@@ -11,6 +11,7 @@ from mondiali.data.ingestion import (
     download_international_results,
     load_international_results,
 )
+from mondiali.features.tier3 import TIER3_COLUMNS
 
 
 def test_download_writes_csv_to_destination(tmp_path: Path) -> None:
@@ -173,9 +174,6 @@ def test_build_processed_matches_includes_tier1_features(tmp_path: Path) -> None
     assert df.iloc[1]["competition_importance"] == 1
     # days_rest_home per Francia nella seconda riga = 53 giorni
     assert df.iloc[1]["days_rest_home"] == 53.0
-
-
-from mondiali.features.tier3 import TIER3_COLUMNS
 
 
 def test_build_processed_matches_without_tier3_snapshots(
