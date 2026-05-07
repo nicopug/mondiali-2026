@@ -21,7 +21,11 @@ from mondiali.data.transfermarkt import scrape_all
 from mondiali.model.elo_logistic import EloLogisticBaseline
 from mondiali.training.baseline_prior import PriorBaseline
 from mondiali.training.evaluate import log_loss_1x2
-from mondiali.training.train import train_tier1_pipeline, train_tier2_pipeline
+from mondiali.training.train import (
+    train_tier1_pipeline,
+    train_tier2_pipeline,
+    train_tier3_pipeline,
+)
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
 log = structlog.get_logger(__name__)
@@ -170,6 +174,52 @@ def train_tier2(
     typer.echo(f"Tier 2 CALIB log-loss: {result['val_log_loss_calib']:.4f}")
     typer.echo(f"Brier before: {result['brier_before']:.4f}")
     typer.echo(f"Brier after:  {result['brier_after']:.4f}")
+
+    if save_model:
+        result["model"].save(Path(save_model))
+        typer.echo(f"Model saved: {save_model}")
+    if save_calibrator:
+        result["calibrator"].save(Path(save_calibrator))
+        typer.echo(f"Calibrator saved: {save_calibrator}")
+
+
+@app.command(name="train-tier3")
+def train_tier3(
+    train_start: str = typer.Option("2014-01-01"),
+    train_end: str = typer.Option("2019-12-31"),
+    val_es_start: str = typer.Option("2020-01-01"),
+    val_es_end: str = typer.Option("2020-12-31"),
+    val_calib_start: str = typer.Option("2021-01-01"),
+    val_calib_end: str = typer.Option("2021-12-31"),
+    val_gate_start: str = typer.Option("2022-01-01"),
+    val_gate_end: str = typer.Option("2022-12-31"),
+    save_model: str = typer.Option("", "--save-model", help="Path JSON dove salvare il modello"),
+    save_calibrator: str = typer.Option(
+        "", "--save-calibrator", help="Path JSON dove salvare il calibrator"
+    ),
+) -> None:
+    """Addestra Tier 3 (XGBoost Poisson + DC + isotonic + Transfermarkt features)."""
+    parquet = CONFIG.data_processed / "matches.parquet"
+    result = train_tier3_pipeline(
+        parquet_path=parquet,
+        train_start=train_start, train_end=train_end,
+        val_es_start=val_es_start, val_es_end=val_es_end,
+        val_calib_start=val_calib_start, val_calib_end=val_calib_end,
+        val_gate_start=val_gate_start, val_gate_end=val_gate_end,
+    )
+    typer.echo(
+        f"Splits: train={result['n_train']} val_es={result['n_val_es']} "
+        f"val_calib={result['n_val_calib']} val_gate={result['n_val_gate']} "
+        f"(pre-2014 dropped: {result['n_train_pre2014_dropped']})"
+    )
+    typer.echo(f"Dixon-Coles rho: {result['rho']:.4f}")
+    typer.echo(
+        f"TM coverage train/gate: "
+        f"{result['tm_coverage_train']:.1%} / {result['tm_coverage_gate']:.1%}"
+    )
+    typer.echo(f"Tier 3 RAW   log-loss: {result['val_log_loss_raw']:.4f}")
+    typer.echo(f"Tier 3 CALIB log-loss: {result['val_log_loss_calib']:.4f}")
+    typer.echo(f"Brier before/after:  {result['brier_before']:.4f} / {result['brier_after']:.4f}")
 
     if save_model:
         result["model"].save(Path(save_model))
