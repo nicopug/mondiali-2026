@@ -17,6 +17,7 @@ import numpy as np
 import pandas as pd
 import structlog
 
+from mondiali.features.tier3 import TIER3_COLUMNS
 from mondiali.model.calibration import IsotonicCalibrator1X2
 from mondiali.model.dixon_coles import dixon_coles_correct, estimate_rho_mle, joint_matrix
 from mondiali.model.markets import prob_1x2
@@ -204,3 +205,51 @@ def train_tier2_pipeline(
         "n_val_calib": len(val_calib),
         "n_val_gate": len(val_gate),
     }
+
+
+def _recompute_tier2_baseline_for_gate(
+    parquet_path: Path,
+    val_gate_start: str,
+    val_gate_end: str,
+    *,
+    train_start: str = "2002-01-01",
+    train_end: str = "2016-12-31",
+    val_es_start: str = "2017-01-01",
+    val_es_end: str = "2017-12-31",
+) -> float:
+    """Ricomputa Tier 2 raw log-loss su un val_gate arbitrario.
+
+    Tier 3 columns sono forzate a NaN prima del training, in modo che il
+    confronto Tier 2 vs Tier 3 sul medesimo val_gate (es. 2022) sia
+    apples-to-apples. XGBoost ignora le feature 100% NaN.
+
+    Returns:
+        ``val_log_loss_raw`` di Tier 2 sul val_gate richiesto.
+    """
+    df = pd.read_parquet(parquet_path)
+    df["date"] = pd.to_datetime(df["date"])
+    df = df.dropna(subset=["days_rest_home", "days_rest_away"]).copy()
+
+    train = df[(df["date"] >= train_start) & (df["date"] <= train_end)].reset_index(drop=True)
+    val_es = df[(df["date"] >= val_es_start) & (df["date"] <= val_es_end)].reset_index(drop=True)
+    val_gate = df[
+        (df["date"] >= val_gate_start) & (df["date"] <= val_gate_end)
+    ].reset_index(drop=True)
+
+    for col in TIER3_COLUMNS:
+        train[col] = np.nan
+        val_es[col] = np.nan
+        val_gate[col] = np.nan
+
+    model = PoissonXGBModel()
+    model.fit(train, early_stopping_val=val_es, early_stopping_rounds=50)
+
+    lam_h_tr, lam_a_tr = model.predict_lambda(train)
+    rho = estimate_rho_mle(
+        lam_h_tr, lam_a_tr,
+        train["home_score"].to_numpy(), train["away_score"].to_numpy(),
+    )
+
+    lam_h_va, lam_a_va = model.predict_lambda(val_gate)
+    val_probs = _compute_1x2_probs(lam_h_va, lam_a_va, rho=rho)
+    return log_loss_1x2(val_gate, val_probs)

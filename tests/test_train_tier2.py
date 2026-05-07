@@ -73,3 +73,22 @@ def test_train_tier2_splits_have_no_overlap() -> None:
     assert result["n_val_es"] > 0
     assert result["n_val_calib"] > 0
     assert result["n_val_gate"] > 0
+
+
+def test_recompute_tier2_baseline_for_gate_returns_float() -> None:
+    """Smoke: helper ritorna un float positivo plausibile."""
+    from mondiali.training.train import _recompute_tier2_baseline_for_gate
+
+    parquet = CONFIG.data_processed / "matches.parquet"
+    if not parquet.exists():
+        pytest.skip("matches.parquet not found")
+
+    baseline = _recompute_tier2_baseline_for_gate(
+        parquet,
+        val_gate_start="2022-01-01",
+        val_gate_end="2022-12-31",
+        train_end="2018-12-31",
+        val_es_start="2019-01-01",
+        val_es_end="2019-12-31",
+    )
+    assert 0.5 < baseline < 1.5
