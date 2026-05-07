@@ -253,3 +253,100 @@ def _recompute_tier2_baseline_for_gate(
     lam_h_va, lam_a_va = model.predict_lambda(val_gate)
     val_probs = _compute_1x2_probs(lam_h_va, lam_a_va, rho=rho)
     return log_loss_1x2(val_gate, val_probs)
+
+
+def train_tier3_pipeline(
+    parquet_path: Path,
+    *,
+    train_start: str = "2014-01-01",
+    train_end: str = "2019-12-31",
+    val_es_start: str = "2020-01-01",
+    val_es_end: str = "2020-12-31",
+    val_calib_start: str = "2021-01-01",
+    val_calib_end: str = "2021-12-31",
+    val_gate_start: str = "2022-01-01",
+    val_gate_end: str = "2022-12-31",
+    early_stopping_rounds: int = 50,
+    model_params: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Pipeline Tier 3: training su matches 2014+ con feature TM.
+
+    Differenze chiave vs Tier 2:
+    - Filtro 2014+ obbligatorio sul training set (TM è NaN prima).
+    - Returns dict include ``n_train_pre2014_dropped`` + ``tm_coverage_*``.
+    """
+    df = pd.read_parquet(parquet_path)
+    df["date"] = pd.to_datetime(df["date"])
+    df = df.dropna(subset=["days_rest_home", "days_rest_away"]).copy()
+
+    n_pre2014 = int((df["date"] < pd.Timestamp("2014-01-01")).sum())
+
+    train = df[(df["date"] >= train_start) & (df["date"] <= train_end)].reset_index(drop=True)
+    val_es = df[(df["date"] >= val_es_start) & (df["date"] <= val_es_end)].reset_index(drop=True)
+    val_calib = df[
+        (df["date"] >= val_calib_start) & (df["date"] <= val_calib_end)
+    ].reset_index(drop=True)
+    val_gate = df[
+        (df["date"] >= val_gate_start) & (df["date"] <= val_gate_end)
+    ].reset_index(drop=True)
+
+    def _tm_coverage(d: pd.DataFrame) -> float:
+        if len(d) == 0:
+            return 0.0
+        both_present = d["home_market_value_total"].notna() & d["away_market_value_total"].notna()
+        return float(both_present.mean())
+
+    log.info(
+        "tier3_pipeline_start",
+        n_train=len(train), n_val_es=len(val_es),
+        n_val_calib=len(val_calib), n_val_gate=len(val_gate),
+        n_train_pre2014_dropped=n_pre2014,
+        tm_coverage_train=_tm_coverage(train),
+        tm_coverage_gate=_tm_coverage(val_gate),
+    )
+
+    model = PoissonXGBModel(params=model_params)
+    model.fit(train, early_stopping_val=val_es, early_stopping_rounds=early_stopping_rounds)
+
+    lam_h_tr, lam_a_tr = model.predict_lambda(train)
+    rho = estimate_rho_mle(
+        lam_h_tr, lam_a_tr,
+        train["home_score"].to_numpy(), train["away_score"].to_numpy(),
+    )
+
+    lam_h_cal, lam_a_cal = model.predict_lambda(val_calib)
+    raw_probs_calib = _compute_1x2_probs(lam_h_cal, lam_a_cal, rho=rho)
+    outcomes_calib = compute_outcomes(val_calib)
+    calibrator = IsotonicCalibrator1X2().fit(raw_probs_calib, outcomes_calib)
+
+    lam_h_ga, lam_a_ga = model.predict_lambda(val_gate)
+    raw_probs_gate = _compute_1x2_probs(lam_h_ga, lam_a_ga, rho=rho)
+    cal_probs_gate = calibrator.predict(raw_probs_gate)
+
+    val_log_loss_raw = log_loss_1x2(val_gate, raw_probs_gate)
+    val_log_loss_calib = log_loss_1x2(val_gate, cal_probs_gate)
+    brier_before = brier_score_1x2(val_gate, raw_probs_gate)
+    brier_after = brier_score_1x2(val_gate, cal_probs_gate)
+
+    log.info(
+        "tier3_validation",
+        log_loss_raw=val_log_loss_raw, log_loss_calib=val_log_loss_calib,
+        brier_before=brier_before, brier_after=brier_after,
+    )
+
+    return {
+        "model": model,
+        "rho": rho,
+        "calibrator": calibrator,
+        "val_log_loss_raw": val_log_loss_raw,
+        "val_log_loss_calib": val_log_loss_calib,
+        "brier_before": brier_before,
+        "brier_after": brier_after,
+        "n_train": len(train),
+        "n_val_es": len(val_es),
+        "n_val_calib": len(val_calib),
+        "n_val_gate": len(val_gate),
+        "n_train_pre2014_dropped": n_pre2014,
+        "tm_coverage_train": _tm_coverage(train),
+        "tm_coverage_gate": _tm_coverage(val_gate),
+    }
