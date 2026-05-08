@@ -17,6 +17,7 @@ import typer
 from mondiali.config import CONFIG
 from mondiali.data.ingestion import build_processed_matches, download_international_results
 from mondiali.data.scope import compute_tier3_scope
+from mondiali.data.tm_discover import discover_all_team_ids, rewrite_nations_file
 from mondiali.data.transfermarkt import scrape_all
 from mondiali.model.elo_logistic import EloLogisticBaseline
 from mondiali.training.baseline_prior import PriorBaseline
@@ -287,6 +288,19 @@ def tm_scrape(
     )
     scrape_all(scope, years, cache_dir, output_path)
     typer.echo(f"Done. Output: {output_path}")
+
+
+@app.command(name="tm-discover-ids")
+def tm_discover_ids() -> None:
+    """Riscopre i veri TM IDs via schnellsuche live e riscrive `tm_nations.py`.
+
+    Hotfix per il bootstrap (~63/78 ID collidenti). Costo: ~80 GET con
+    rate limit 1.5s = ~2 minuti.
+    """
+    mapping = discover_all_team_ids()
+    nations_file = Path(__file__).resolve().parent.parent / "data" / "tm_nations.py"
+    rewrite_nations_file(mapping, nations_file)
+    typer.echo(f"OK - riscritto {nations_file} con {len(mapping)} nazioni")
 
 
 if __name__ == "__main__":

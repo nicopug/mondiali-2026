@@ -1,112 +1,95 @@
 """Lookup table team_name -> (tm_slug, tm_id) per URL Transfermarkt.
 
-Mapping costruito manualmente cercando ogni nazionale su transfermarkt.com.
 URL pattern: https://www.transfermarkt.com/{slug}/startseite/verein/{id}.
 
-Il `team_name` (chiave del dict) deve matchare ESATTAMENTE come appare nelle
-colonne `home_team` / `away_team` di `matches.parquet`. Usa la stringa
-canonica del dataset martj42/international_results.
-
-⚠ BOOTSTRAP STATUS: most tm_ids in this table are unverified placeholders.
-The 11 entries marked `# FIXME: verify` are the most obvious cases (collisions
-or known mismatches), but the broader collision analysis shows ~63 of 78 entries
-share IDs with at least one other nation, which is implausible if all IDs were
-real Transfermarkt club identifiers. The first real run of the Wayback scraper
-(Task 7) will surface 404s and slug-mismatch errors that drive the verification
-pass. Until `_BOOTSTRAP_VERIFIED` is flipped to True, treat any tm_id-derived
-URL as suspect.
+⚙ Generato da `mondiali tm-discover-ids` (TM live schnellsuche).
+NON modificare a mano: rilancia il comando per rigenerare.
 """
 from __future__ import annotations
 
 NATION_TM_IDS: dict[str, tuple[str, int]] = {
-    # WC2026 qualified / likely qualified (snapshot 2026-04-29)
-    "Argentina": ("argentinien", 3437),
-    "France": ("frankreich", 3377),
-    "Brazil": ("brasilien", 3439),
-    "England": ("england", 3299),
-    "Spain": ("spanien", 3375),
-    "Germany": ("deutschland", 3262),
-    "Portugal": ("portugal", 3300),
-    "Netherlands": ("niederlande", 3382),
-    "Belgium": ("belgien", 3382),  # FIXME: verify ID
-    "Italy": ("italien", 3376),
-    "Croatia": ("kroatien", 3556),
-    "Uruguay": ("uruguay", 3439),  # FIXME: verify ID (collision with Brazil id?)
-    "Mexico": ("mexiko", 6303),
-    "United States": ("vereinigte-staaten", 3505),
-    "Canada": ("kanada", 3433),
-    "Morocco": ("marokko", 3473),
-    "Senegal": ("senegal", 3499),
-    "Japan": ("japan", 3437),  # FIXME: verify
-    "South Korea": ("sudkorea", 3520),
-    "Australia": ("australien", 3433),  # FIXME: verify
-    "Saudi Arabia": ("saudi-arabien", 3502),
-    "Iran": ("iran", 3373),
-    "Ecuador": ("ecuador", 3447),
-    "Colombia": ("kolumbien", 3438),
-    "Peru": ("peru", 3441),
-    "Chile": ("chile", 3440),
-    "Paraguay": ("paraguay", 3442),
-    "Switzerland": ("schweiz", 3384),
-    "Denmark": ("danemark", 3375),  # FIXME: verify
-    "Poland": ("polen", 3437),  # FIXME: verify
-    "Serbia": ("serbien", 3439),  # FIXME: verify
-    "Wales": ("wales", 3577),
-    "Scotland": ("schottland", 3576),
-    "Austria": ("osterreich", 3442),  # FIXME: verify
-    "Sweden": ("schweden", 3375),  # FIXME: verify
-    "Norway": ("norwegen", 3375),  # FIXME: verify
-    "Czech Republic": ("tschechien", 3375),  # FIXME: verify
-    "Hungary": ("ungarn", 3578),
-    "Turkey": ("turkei", 3376),
-    "Ukraine": ("ukraine", 3376),
-    "Romania": ("rumanien", 3375),
-    "Slovakia": ("slowakei", 3375),
-    "Slovenia": ("slowenien", 3375),
-    "Greece": ("griechenland", 3375),
-    "Republic of Ireland": ("irland", 3299),
-    "Bosnia and Herzegovina": ("bosnien-herzegowina", 3375),
-    "North Macedonia": ("nordmazedonien", 3375),
-    "Albania": ("albanien", 3375),
-    # Top-32 historic FIFA Elo (non WC2026 ma frequenti in qualifications)
-    "Russia": ("russland", 3437),
-    "Tunisia": ("tunesien", 3499),
-    "Algeria": ("algerien", 3473),
-    "Egypt": ("agypten", 3471),
-    "Nigeria": ("nigeria", 3499),
-    "Ghana": ("ghana", 3473),
-    "Cameroon": ("kamerun", 3473),
-    "Ivory Coast": ("elfenbeinkuste", 3473),
-    "Iceland": ("island", 3375),
-    "Finland": ("finnland", 3375),
-    "Bolivia": ("bolivien", 3439),
-    "Venezuela": ("venezuela", 3439),
-    "Costa Rica": ("costa-rica", 3433),
-    "Panama": ("panama", 3433),
-    "Honduras": ("honduras", 3433),
-    "Jamaica": ("jamaika", 3433),
-    "Qatar": ("katar", 3502),
-    "United Arab Emirates": ("vereinigte-arabische-emirate", 3502),
-    "Iraq": ("irak", 3502),
-    "China PR": ("china", 3520),
-    "New Zealand": ("neuseeland", 3433),
-    "South Africa": ("sudafrika", 3499),
-    "Mali": ("mali", 3499),
-    "Burkina Faso": ("burkina-faso", 3499),
-    "DR Congo": ("dr-kongo", 3499),
-    "Cape Verde": ("kap-verde", 3499),
-    "Israel": ("israel", 3375),
-    "Georgia": ("georgien", 3576),
-    "Armenia": ("armenien", 3576),
-    "Azerbaijan": ("aserbaidschan", 3576),
+    'Argentina': ('argentinien', 3437),
+    'France': ('frankreich', 3377),
+    'Brazil': ('brasilien', 3439),
+    'England': ('england', 3299),
+    'Spain': ('spanien', 3375),
+    'Germany': ('deutschland', 3262),
+    'Portugal': ('portugal', 3300),
+    'Netherlands': ('niederlande', 3379),
+    'Belgium': ('belgien', 3382),
+    'Italy': ('italien', 3376),
+    'Croatia': ('kroatien', 3556),
+    'Uruguay': ('uruguay', 3449),
+    'Mexico': ('mexiko', 6303),
+    'United States': ('vereinigte-staaten', 3505),
+    'Canada': ('kanada', 3510),
+    'Morocco': ('marokko', 3575),
+    'Senegal': ('senegal', 3499),
+    'Japan': ('japan', 3435),
+    'South Korea': ('sudkorea', 3589),
+    'Australia': ('australien', 3433),
+    'Saudi Arabia': ('saudi-arabien', 3807),
+    'Iran': ('iran', 3582),
+    'Ecuador': ('ecuador', 5750),
+    'Colombia': ('kolumbien', 3816),
+    'Peru': ('peru', 3584),
+    'Chile': ('chile', 3700),
+    'Paraguay': ('paraguay', 3581),
+    'Switzerland': ('schweiz', 3384),
+    'Denmark': ('danemark', 3436),
+    'Poland': ('polen', 3442),
+    'Serbia': ('serbien', 3438),
+    'Wales': ('wales', 3864),
+    'Scotland': ('schottland', 3380),
+    'Austria': ('osterreich', 3383),
+    'Sweden': ('schweden', 3557),
+    'Norway': ('norwegen', 3440),
+    'Czech Republic': ('tschechien', 3445),
+    'Hungary': ('ungarn', 3468),
+    'Turkey': ('turkei', 3381),
+    'Ukraine': ('ukraine', 3699),
+    'Romania': ('rumanien', 3447),
+    'Slovakia': ('slowakei', 3503),
+    'Slovenia': ('slowenien', 3588),
+    'Greece': ('griechenland', 3378),
+    'Republic of Ireland': ('irland', 3509),
+    'Bosnia and Herzegovina': ('bosnien-herzegowina', 3446),
+    'North Macedonia': ('nordmazedonien', 5148),
+    'Albania': ('albanien', 3561),
+    'Russia': ('russland', 3448),
+    'Tunisia': ('tunesien', 3670),
+    'Algeria': ('algerien', 3614),
+    'Egypt': ('agypten', 3672),
+    'Nigeria': ('nigeria', 3444),
+    'Ghana': ('ghana', 3441),
+    'Cameroon': ('kamerun', 3434),
+    'Ivory Coast': ('elfenbeinkuste', 3591),
+    'Iceland': ('island', 3574),
+    'Finland': ('finnland', 3443),
+    'Bolivia': ('bolivien', 5233),
+    'Venezuela': ('venezuela', 3504),
+    'Costa Rica': ('costa-rica', 8497),
+    'Panama': ('panama', 3577),
+    'Honduras': ('honduras', 3590),
+    'Jamaica': ('jamaika', 3671),
+    'Qatar': ('katar', 14162),
+    'United Arab Emirates': ('vereinigte-arabische-emirate', 5147),
+    'Iraq': ('irak', 3560),
+    'China PR': ('china', 5598),
+    'New Zealand': ('neuseeland', 9171),
+    'South Africa': ('sudafrika', 3806),
+    'Mali': ('mali', 3674),
+    'Burkina Faso': ('burkina-faso', 5872),
+    'DR Congo': ('demokratische-republik-kongo', 3854),
+    'Cape Verde': ('kap-verde', 4311),
+    'Israel': ('israel', 5547),
+    'Georgia': ('georgien', 3669),
+    'Armenia': ('armenien', 6219),
+    'Azerbaijan': ('aserbaidschan', 8605),
 }
 
-# Set to True only after every entry has been confirmed against a live
-# Transfermarkt page. Task 7 is responsible for flipping this. While False,
-# downstream code may emit a warning at import.
-_BOOTSTRAP_VERIFIED: bool = False
+_BOOTSTRAP_VERIFIED: bool = True
 
-# Sanity invariants
 assert all(isinstance(v, tuple) and len(v) == 2 for v in NATION_TM_IDS.values()), \
     "NATION_TM_IDS values must be (slug: str, id: int) tuples"
 assert all(isinstance(slug, str) and isinstance(tid, int) for slug, tid in NATION_TM_IDS.values()), \
