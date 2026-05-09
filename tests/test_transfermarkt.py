@@ -18,6 +18,7 @@ from mondiali.data.transfermarkt import (
     _parse_value_eur,
     _query_cdx,
     _wayback_url,
+    build_from_cache,
     scrape_all,
 )
 
@@ -334,6 +335,156 @@ def test_best_snapshot_for_year_falls_through_to_level2(tmp_path, monkeypatch):
     assert snap is not None
     snap_date, _, _ = snap
     assert snap_date == date(2018, 3, 15)
+
+
+def test_best_snapshot_for_year_uses_cache_without_network(tmp_path, monkeypatch):
+    """Fast path: se cache locale ha snapshot validi, salta CDX (zero requests)."""
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    fixture = (FIXTURES_DIR / "tm_italy_2018.html").read_text(encoding="utf-8")
+    (cache_dir / "italien__20180815000000.html").write_text(fixture, encoding="utf-8")
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("network must not be called when cache hit is available")
+
+    monkeypatch.setattr("mondiali.data.transfermarkt.requests.get", _boom)
+
+    snap = _best_snapshot_for_year(
+        "https://www.transfermarkt.com/italien/startseite/verein/3376",
+        2018,
+        cache_dir,
+    )
+    assert snap is not None
+    snap_date, parsed, source = snap
+    assert snap_date == date(2018, 8, 15)
+    assert parsed.total_value_eur > 0
+    assert source.startswith("https://web.archive.org/web/20180815000000/")
+
+
+def test_best_snapshot_for_year_cache_falls_back_to_year_minus_1(tmp_path, monkeypatch):
+    """Cache ha solo file dell'anno precedente (semestre 2) → livello 3 vince."""
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    fixture = (FIXTURES_DIR / "tm_italy_2018.html").read_text(encoding="utf-8")
+    (cache_dir / "italien__20171015000000.html").write_text(fixture, encoding="utf-8")
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("network must not be called when cache hit is available")
+
+    monkeypatch.setattr("mondiali.data.transfermarkt.requests.get", _boom)
+
+    snap = _best_snapshot_for_year(
+        "https://www.transfermarkt.com/italien/startseite/verein/3376",
+        2018,
+        cache_dir,
+    )
+    assert snap is not None
+    snap_date, _, _ = snap
+    assert snap_date == date(2017, 10, 15)
+
+
+def test_best_snapshot_for_year_cache_ignores_other_slugs(tmp_path, monkeypatch):
+    """File cache di altri slug non devono essere considerati hit."""
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    fixture = (FIXTURES_DIR / "tm_italy_2018.html").read_text(encoding="utf-8")
+    # cache popolata SOLO con frankreich, query è su italien → no hit
+    (cache_dir / "frankreich__20180815000000.html").write_text(fixture, encoding="utf-8")
+
+    # CDX query deve partire (no cache hit) → mock vuoto → None
+    @responses.activate
+    def _run():
+        responses.add(
+            responses.GET,
+            "https://web.archive.org/cdx/search/cdx",
+            json=[["urlkey", "timestamp", "original", "mimetype", "statuscode", "digest", "length"]],
+        )
+        return _best_snapshot_for_year(
+            "https://www.transfermarkt.com/italien/startseite/verein/3376",
+            2018,
+            cache_dir,
+        )
+
+    assert _run() is None
+
+
+def test_build_from_cache_writes_parquet_without_network(tmp_path, monkeypatch):
+    """build_from_cache: zero requests, parquet generato dai cache file esistenti."""
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    fixture = (FIXTURES_DIR / "tm_italy_2018.html").read_text(encoding="utf-8")
+    # cache popolata per Italy 2018 e 2019 (stesso fixture, ts diversi)
+    (cache_dir / "italien__20180815000000.html").write_text(fixture, encoding="utf-8")
+    (cache_dir / "italien__20190820000000.html").write_text(fixture, encoding="utf-8")
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("network must not be called by build_from_cache")
+
+    monkeypatch.setattr("mondiali.data.transfermarkt.requests.get", _boom)
+
+    out = tmp_path / "snapshots.parquet"
+    n_target, n_filled = build_from_cache(
+        scope=["Italy"],
+        years=[2018, 2019, 2024],  # 2024 fuori da fallback (richiede ≥2023 sem.2)
+        cache_dir=cache_dir,
+        output_path=out,
+    )
+    assert n_target == 3
+    assert n_filled == 2
+    df = pd.read_parquet(out)
+    assert len(df) == 2
+    assert set(df["year"].tolist()) == {2018, 2019}
+    assert df.iloc[0]["nation"] == "Italy"
+
+
+@responses.activate
+def test_scrape_all_resume_skips_already_done_nations(tmp_path, monkeypatch):
+    """resume=True: le nazioni già in parquet vengono saltate (gap inclusi)."""
+    monkeypatch.setattr("mondiali.data.transfermarkt.RATE_LIMIT_SECONDS", 0.0)
+
+    # Pre-popola parquet con 2 record per "Italy"
+    out = tmp_path / "snapshots.parquet"
+    pre_df = pd.DataFrame([
+        {"nation": "Italy", "year": 2018, "snapshot_date": pd.Timestamp("2018-07-15"),
+         "total_value_eur": 800_000_000.0, "top11_value_eur": 600_000_000.0,
+         "n_players": 23, "source_url": "https://web.archive.org/web/foo"},
+        {"nation": "Italy", "year": 2019, "snapshot_date": pd.Timestamp("2019-07-10"),
+         "total_value_eur": 850_000_000.0, "top11_value_eur": 620_000_000.0,
+         "n_players": 24, "source_url": "https://web.archive.org/web/bar"},
+    ])
+    pre_df.to_parquet(out, index=False)
+
+    # CDX mock: deve NON essere chiamato per Italy
+    cdx_calls = {"n": 0}
+
+    def cdx_callback(request):
+        cdx_calls["n"] += 1
+        return (200, {}, json.dumps([
+            ["urlkey", "timestamp", "original", "mimetype", "statuscode", "digest", "length"]
+        ]))
+
+    responses.add_callback(
+        responses.GET,
+        "https://web.archive.org/cdx/search/cdx",
+        callback=cdx_callback,
+        content_type="application/json",
+    )
+
+    scrape_all(
+        scope=["Italy"],
+        years=[2018, 2019, 2020],
+        cache_dir=tmp_path / "cache",
+        output_path=out,
+        resume=True,
+    )
+
+    # Italy doveva essere completamente skippata
+    assert cdx_calls["n"] == 0, "Italy era già in parquet, non dovevano partire query CDX"
+
+    # Output preserva i 2 record originali
+    df = pd.read_parquet(out)
+    assert len(df) == 2
+    assert set(df["year"]) == {2018, 2019}
 
 
 @responses.activate

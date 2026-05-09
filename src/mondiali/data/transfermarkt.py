@@ -256,20 +256,92 @@ def _build_target_url(nation: str) -> str | None:
     return TRANSFERMARKT_URL_TEMPLATE.format(slug=slug, tm_id=tm_id)
 
 
+_CACHE_FILE_RE = re.compile(r"^(?P<slug>[a-z0-9-]+)__(?P<ts>\d{14})\.html$")
+
+
+def _scan_cache_for_slug(slug: str, cache_dir: Path) -> list[tuple[str, Path]]:
+    """Lista (timestamp, path) di tutti i cache file per slug. Slug match esatto."""
+    if not cache_dir.exists():
+        return []
+    out: list[tuple[str, Path]] = []
+    for p in cache_dir.glob(f"{slug}__*.html"):
+        m = _CACHE_FILE_RE.match(p.name)
+        if m and m.group("slug") == slug:
+            out.append((m.group("ts"), p))
+    return out
+
+
+def _ts_to_date(ts: str) -> date | None:
+    try:
+        return date(int(ts[:4]), int(ts[4:6]), int(ts[6:8]))
+    except ValueError:
+        return None
+
+
+def _try_cached_for_year(
+    target_url: str, year: int, cache_dir: Path
+) -> tuple[date, SquadValue, str] | None:
+    """Soddisfa (slug, year) dalla cache locale senza CDX query.
+
+    Replica la fallback chain di `_best_snapshot_for_year` ma usando solo file
+    già scaricati. Stesso ordine: ±2 mesi da 1 luglio → tutto l'anno → 2° semestre
+    anno-1. Stessa logica "closest-to-target". Se nessun file della cache
+    soddisfa, ritorna None (caller fa fallback CDX normale).
+    """
+    slug = _slug_from_url(target_url)
+    entries = _scan_cache_for_slug(slug, cache_dir)
+    if not entries:
+        return None
+
+    target = date(year, 7, 1)
+    levels = [
+        (date(year, 5, 1), date(year, 9, 1)),
+        (date(year, 1, 1), date(year, 12, 31)),
+        (date(year - 1, 7, 1), date(year - 1, 12, 31)),
+    ]
+
+    for from_d, to_d in levels:
+        candidates: list[tuple[date, str, Path]] = []
+        for ts, path in entries:
+            d = _ts_to_date(ts)
+            if d is None:
+                continue
+            if from_d <= d <= to_d:
+                candidates.append((d, ts, path))
+        if not candidates:
+            continue
+        candidates.sort(key=lambda c: abs((c[0] - target).days))
+        for snap_date, ts, path in candidates[:_PARSE_ATTEMPTS_PER_LEVEL]:
+            html = path.read_text(encoding="utf-8")
+            parsed = _parse_squad_value(html)
+            if parsed is None:
+                continue
+            source = f"{WAYBACK_FETCH_BASE}/{ts}/{target_url}"
+            return (snap_date, parsed, source)
+    return None
+
+
 def _best_snapshot_for_year(
     target_url: str, year: int, cache_dir: Path
 ) -> tuple[date, SquadValue, str] | None:
     """Adaptive fallback per ``(nation_url, year)``.
 
-    Tre livelli:
-    1. CDX query [year-05-01, year-09-01] (vicino a 1 luglio)
-    2. CDX query [year-01-01, year-12-31] (tutto l'anno)
-    3. CDX query [year-1-07-01, year-1-12-31] (anno precedente, secondo semestre)
+    Fast path: se la cache locale contiene già snapshot validi per questo
+    (slug, year), li usa direttamente saltando CDX (zero network).
+
+    Tre livelli (sia su cache che su CDX):
+    1. [year-05-01, year-09-01] (vicino a 1 luglio)
+    2. [year-01-01, year-12-31] (tutto l'anno)
+    3. [year-1-07-01, year-1-12-31] (anno precedente, secondo semestre)
 
     Per ogni livello sceglie lo snapshot più vicino al target (1 luglio),
     fetch HTML, parsa rosa. Se parse fallisce, prova la prossima riga
     (massimo `_PARSE_ATTEMPTS_PER_LEVEL` tentativi per livello). Se tutti i livelli falliscono → None.
     """
+    cached = _try_cached_for_year(target_url, year, cache_dir)
+    if cached is not None:
+        return cached
+
     target = date(year, 7, 1)
 
     levels = [
@@ -296,56 +368,8 @@ def _best_snapshot_for_year(
     return None
 
 
-def scrape_all(
-    scope: list[str],
-    years: list[int],
-    cache_dir: Path,
-    output_path: Path,
-) -> None:
-    """Itera scope × years, raccoglie snapshot, scrive snapshots.parquet.
-
-    Args:
-        scope: lista nazionali (chiavi di NATION_TM_IDS)
-        years: anni 2014..2025 tipicamente
-        cache_dir: directory per HTML cache (creata se mancante)
-        output_path: path dove scrivere snapshots.parquet (parent creato se mancante)
-    """
-    records: list[SnapshotRecord] = []
-    n_target = 0
-    n_filled = 0
-
-    for nation in scope:
-        url = _build_target_url(nation)
-        if url is None:
-            log.warning("nation_not_in_lookup", nation=nation)
-            continue
-        for year in years:
-            n_target += 1
-            log.info("scraping", nation=nation, year=year)
-            result = _best_snapshot_for_year(url, year, cache_dir)
-            if result is None:
-                log.warning("no_snapshot_found", nation=nation, year=year)
-                continue
-            snap_date, parsed, source = result
-            records.append(SnapshotRecord(
-                nation=nation,
-                year=year,
-                snapshot_date=snap_date,
-                total_value_eur=parsed.total_value_eur,
-                top11_value_eur=parsed.top11_value_eur,
-                n_players=parsed.n_players,
-                source_url=source,
-            ))
-            n_filled += 1
-
-    coverage = n_filled / n_target if n_target else 0.0
-    log.info(
-        "scrape_complete",
-        n_target=n_target, n_filled=n_filled, coverage=f"{coverage:.1%}",
-    )
-    if n_target > 0 and coverage < 0.6:
-        log.warning("coverage_below_60pct", coverage=coverage)
-
+def _records_to_parquet(records: list[SnapshotRecord], output_path: Path) -> int:
+    """Serializza records a parquet (helper condiviso scrape_all + build_from_cache)."""
     columns = [
         "nation", "year", "snapshot_date", "total_value_eur",
         "top11_value_eur", "n_players", "source_url",
@@ -368,4 +392,151 @@ def scrape_all(
     df["snapshot_date"] = pd.to_datetime(df["snapshot_date"])
     output_path.parent.mkdir(parents=True, exist_ok=True)
     df.to_parquet(output_path, index=False)
-    log.info("wrote_snapshots_parquet", path=str(output_path), rows=len(df))
+    return len(df)
+
+
+def build_from_cache(
+    scope: list[str],
+    years: list[int],
+    cache_dir: Path,
+    output_path: Path,
+) -> tuple[int, int]:
+    """Costruisce snapshots.parquet usando SOLO HTML già in cache (zero network).
+
+    Per ogni (nation, year) chiama `_try_cached_for_year`. Salta silenziosamente
+    le coppie senza match in cache. Pensato per recuperare lavoro fatto da
+    `scrape_all` interrotto prima della scrittura del parquet.
+
+    Returns:
+        (n_target, n_filled): numero di coppie target e numero di record scritti.
+    """
+    records: list[SnapshotRecord] = []
+    n_target = 0
+    n_filled = 0
+
+    for nation in scope:
+        url = _build_target_url(nation)
+        if url is None:
+            log.warning("nation_not_in_lookup", nation=nation)
+            continue
+        for year in years:
+            n_target += 1
+            result = _try_cached_for_year(url, year, cache_dir)
+            if result is None:
+                continue
+            snap_date, parsed, source = result
+            records.append(SnapshotRecord(
+                nation=nation,
+                year=year,
+                snapshot_date=snap_date,
+                total_value_eur=parsed.total_value_eur,
+                top11_value_eur=parsed.top11_value_eur,
+                n_players=parsed.n_players,
+                source_url=source,
+            ))
+            n_filled += 1
+
+    coverage = n_filled / n_target if n_target else 0.0
+    log.info(
+        "build_from_cache_complete",
+        n_target=n_target, n_filled=n_filled, coverage=f"{coverage:.1%}",
+    )
+    _records_to_parquet(records, output_path)
+    log.info("wrote_snapshots_parquet", path=str(output_path), rows=n_filled)
+    return n_target, n_filled
+
+
+def _load_existing_records(output_path: Path) -> tuple[list[SnapshotRecord], set[str]]:
+    """Carica records già presenti in snapshots.parquet (per --resume).
+
+    Returns:
+        (records, nations_done): records esistenti + set di nazioni già coperte.
+    """
+    if not output_path.exists():
+        return [], set()
+    df = pd.read_parquet(output_path)
+    records: list[SnapshotRecord] = []
+    for _, row in df.iterrows():
+        snap_date = row["snapshot_date"]
+        if hasattr(snap_date, "date"):
+            snap_date = snap_date.date()
+        records.append(SnapshotRecord(
+            nation=str(row["nation"]),
+            year=int(row["year"]),
+            snapshot_date=snap_date,
+            total_value_eur=float(row["total_value_eur"]),
+            top11_value_eur=float(row["top11_value_eur"]),
+            n_players=int(row["n_players"]),
+            source_url=str(row["source_url"]),
+        ))
+    nations_done = set(df["nation"].unique())
+    return records, nations_done
+
+
+def scrape_all(
+    scope: list[str],
+    years: list[int],
+    cache_dir: Path,
+    output_path: Path,
+    *,
+    resume: bool = False,
+) -> None:
+    """Itera scope × years, raccoglie snapshot, scrive snapshots.parquet.
+
+    Args:
+        scope: lista nazionali (chiavi di NATION_TM_IDS)
+        years: anni 2014..2025 tipicamente
+        cache_dir: directory per HTML cache (creata se mancante)
+        output_path: path dove scrivere snapshots.parquet (parent creato se mancante)
+        resume: se True e ``output_path`` esiste, salta integralmente le
+            nazioni già presenti (gap inclusi → niente CDX retry).
+    """
+    if resume:
+        existing_records, nations_done = _load_existing_records(output_path)
+        records: list[SnapshotRecord] = list(existing_records)
+        log.info("resume_mode_active", existing_records=len(existing_records),
+                 nations_skipped=len(nations_done))
+    else:
+        existing_records = []
+        records = []
+        nations_done = set()
+    n_target = 0
+    n_filled_new = 0
+
+    for nation in scope:
+        if nation in nations_done:
+            continue
+        url = _build_target_url(nation)
+        if url is None:
+            log.warning("nation_not_in_lookup", nation=nation)
+            continue
+        for year in years:
+            n_target += 1
+            log.info("scraping", nation=nation, year=year)
+            result = _best_snapshot_for_year(url, year, cache_dir)
+            if result is None:
+                log.warning("no_snapshot_found", nation=nation, year=year)
+                continue
+            snap_date, parsed, source = result
+            records.append(SnapshotRecord(
+                nation=nation,
+                year=year,
+                snapshot_date=snap_date,
+                total_value_eur=parsed.total_value_eur,
+                top11_value_eur=parsed.top11_value_eur,
+                n_players=parsed.n_players,
+                source_url=source,
+            ))
+            n_filled_new += 1
+
+    coverage = n_filled_new / n_target if n_target else 0.0
+    log.info(
+        "scrape_complete",
+        n_target=n_target, n_filled_new=n_filled_new, coverage=f"{coverage:.1%}",
+        existing=len(existing_records),
+    )
+    if n_target > 0 and coverage < 0.6:
+        log.warning("coverage_below_60pct_new", coverage=coverage)
+
+    rows_written = _records_to_parquet(records, output_path)
+    log.info("wrote_snapshots_parquet", path=str(output_path), rows=rows_written)

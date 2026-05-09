@@ -18,7 +18,7 @@ from mondiali.config import CONFIG
 from mondiali.data.ingestion import build_processed_matches, download_international_results
 from mondiali.data.scope import compute_tier3_scope
 from mondiali.data.tm_discover import discover_all_team_ids, rewrite_nations_file
-from mondiali.data.transfermarkt import scrape_all
+from mondiali.data.transfermarkt import build_from_cache, scrape_all
 from mondiali.model.elo_logistic import EloLogisticBaseline
 from mondiali.training.baseline_prior import PriorBaseline
 from mondiali.training.evaluate import log_loss_1x2
@@ -238,6 +238,10 @@ def tm_scrape(
         "", "--scope-file",
         help="Path JSON con lista nazioni; se vuoto, computa da matches.parquet",
     ),
+    resume: bool = typer.Option(
+        True, "--resume/--no-resume",
+        help="Se snapshots.parquet esiste, salta integralmente le nazioni già coperte (gap inclusi)",
+    ),
 ) -> None:
     """Scrape Transfermarkt market values via Wayback Machine per Tier 3.
 
@@ -286,8 +290,63 @@ def tm_scrape(
         f"Scraping {len(scope)} nations × {len(years)} years = "
         f"{len(scope) * len(years)} target snapshots"
     )
-    scrape_all(scope, years, cache_dir, output_path)
+    scrape_all(scope, years, cache_dir, output_path, resume=resume)
     typer.echo(f"Done. Output: {output_path}")
+
+
+@app.command(name="tm-build-from-cache")
+def tm_build_from_cache(
+    start_year: int = typer.Option(2014, help="Anno iniziale snapshot"),
+    end_year: int = typer.Option(2025, help="Anno finale snapshot incluso"),
+    scope_file: str = typer.Option(
+        "", "--scope-file",
+        help="Path JSON con lista nazioni; se vuoto, computa da matches.parquet",
+    ),
+) -> None:
+    """Costruisce snapshots.parquet usando SOLO gli HTML già scaricati in cache.
+
+    Zero chiamate di rete. Pensato per recuperare lavoro fatto da `tm-scrape`
+    interrotto prima della scrittura del parquet finale.
+    """
+    if start_year > end_year:
+        typer.echo(
+            f"start-year ({start_year}) deve essere <= end-year ({end_year})",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    if scope_file:
+        p = Path(scope_file)
+        if not p.exists():
+            typer.echo(f"scope-file not found: {p}", err=True)
+            raise typer.Exit(1)
+        try:
+            with p.open() as f:
+                scope = json.load(f)
+        except json.JSONDecodeError as exc:
+            typer.echo(f"scope-file is not valid JSON: {exc}", err=True)
+            raise typer.Exit(1)
+        if not isinstance(scope, list) or not all(isinstance(n, str) for n in scope):
+            typer.echo("scope-file must contain a JSON array of strings", err=True)
+            raise typer.Exit(1)
+    else:
+        parquet = CONFIG.data_processed / "matches.parquet"
+        if not parquet.exists():
+            typer.echo("matches.parquet non trovato — esegui `mondiali ingest` prima", err=True)
+            raise typer.Exit(1)
+        df = pd.read_parquet(parquet)
+        df["date"] = pd.to_datetime(df["date"])
+        scope = compute_tier3_scope(df)
+
+    cache_dir = CONFIG.data_raw / "transfermarkt" / "cache"
+    output_path = CONFIG.data_raw / "transfermarkt" / "snapshots.parquet"
+    years = list(range(start_year, end_year + 1))
+    n_target, n_filled = build_from_cache(scope, years, cache_dir, output_path)
+    coverage = n_filled / n_target if n_target else 0.0
+    typer.echo(
+        f"OK - built {n_filled}/{n_target} snapshots from cache "
+        f"({coverage:.1%}) -> {output_path}"
+    )
 
 
 @app.command(name="tm-discover-ids")
