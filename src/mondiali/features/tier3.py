@@ -61,6 +61,10 @@ def add_tier3_features(matches: pd.DataFrame, snapshots: pd.DataFrame) -> pd.Dat
         .sort_values("snapshot_date")
         .reset_index(drop=True)
     )
+    # Normalize snapshot_date dtype to match matches['date']: parquet roundtrip può
+    # produrre [ms]/[us] mentre matches è tipicamente [ns]; merge_asof esige stessa unit.
+    target_dtype = out["date"].dtype
+    snaps["snapshot_date"] = pd.to_datetime(snaps["snapshot_date"]).astype(target_dtype)
     log.info("tier3_lookup_built", n_nations_eligible=len(eligible_nations))
 
     if snaps.empty:
