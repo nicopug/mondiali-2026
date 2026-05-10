@@ -44,7 +44,10 @@ class SquadValue:
 
 
 # US/EN format: "€80.00m", "€500k", "€1.50m"
-_VALUE_RE_US = re.compile(r"€\s*([\d.,]+)\s*([mk]?)", re.IGNORECASE)
+# Atomic group (?>...) prevents backtracking on the number, so unsupported suffixes
+# like "bn" correctly return None instead of partially matching "€1" from "€1.20bn".
+# Requires Python 3.11+ (atomic groups added in re module).
+_VALUE_RE_US = re.compile(r"€\s*((?>(?:\d+[.,])*\d+))\s*([mk]?)(?![a-zA-Z0-9])", re.IGNORECASE)
 # DE format: "20,50 Mill. €", "5,00 Tsd. €", "1,50 Mio. €", "75 Th. €"
 _VALUE_RE_DE = re.compile(r"([\d.,]+)\s+(Mio|Mill|Tsd|Th)\.?\s*€", re.IGNORECASE)
 

@@ -52,3 +52,58 @@ INJURIES_CSV_COLUMNS: list[str] = [
 ]
 INJURY_STATUS_DOMAIN: frozenset[str] = frozenset({"out", "doubtful", "available"})
 INJURY_SOURCE_DOMAIN: frozenset[str] = frozenset({"wikipedia_squads", "manual"})
+
+
+import re
+from dataclasses import dataclass
+
+from bs4 import BeautifulSoup
+
+from mondiali.data.transfermarkt import _parse_value_eur
+
+
+@dataclass(frozen=True)
+class RosterPlayer:
+    player_name: str
+    player_url_slug: str
+    position: str
+    market_value_eur: int | None
+
+
+_PLAYER_PROFILE_RE = re.compile(r"^/(?P<slug>[a-z0-9-]+)/profil/spieler/\d+")
+
+
+def _parse_roster_html(html: str) -> list[RosterPlayer]:
+    """Parse a TM kader page → list of RosterPlayer.
+
+    Selects ``table.items`` (modern TM ≥2018) or ``table#kader`` (legacy).
+    For each row, extracts name+slug from ``td.hauptlink a[title]``,
+    position from the row's second non-hauptlink ``<td>``, and value from
+    ``td.rechts.hauptlink`` via ``_parse_value_eur``.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    table = soup.select_one("table.items") or soup.select_one("table#kader")
+    if table is None:
+        return []
+    out: list[RosterPlayer] = []
+    for row in table.select("tbody > tr"):
+        link = row.select_one("td.hauptlink a[href*='/profil/spieler/']")
+        if link is None:
+            continue
+        m = _PLAYER_PROFILE_RE.match(link.get("href", ""))
+        if not m:
+            continue
+        slug = m.group("slug")
+        name = link.get("title") or link.get_text(strip=True)
+        tds = row.find_all("td", recursive=False)
+        position = tds[1].get_text(strip=True) if len(tds) >= 2 else ""
+        value_cell = row.select_one("td.rechts.hauptlink") or row.select_one("td.rechts")
+        value: int | None = None
+        if value_cell is not None:
+            parsed = _parse_value_eur(value_cell.get_text(strip=True))
+            value = int(parsed) if parsed is not None else None
+        out.append(RosterPlayer(
+            player_name=name, player_url_slug=slug,
+            position=position, market_value_eur=value,
+        ))
+    return out
