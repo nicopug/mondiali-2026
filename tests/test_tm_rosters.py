@@ -93,3 +93,71 @@ def test_cache_fast_path_returns_html_when_present(tmp_path: Path) -> None:
 def test_cache_fast_path_returns_none_when_missing(tmp_path: Path) -> None:
     from mondiali.data.tm_rosters import _read_cached_roster
     assert _read_cached_roster("nope", "wc2018", tmp_path) is None
+
+
+from unittest.mock import patch
+
+import pandas as pd
+
+
+def test_scrape_rosters_resume_skips_already_done(tmp_path: Path) -> None:
+    """If rosters.parquet already has (nation, tournament), skip without network call."""
+    from mondiali.data.tm_rosters import scrape_rosters_all
+
+    output_path = tmp_path / "rosters.parquet"
+    cache_dir = tmp_path / "cache"
+    existing = pd.DataFrame([{
+        "nation": "France",
+        "tournament": "wc2018",
+        "tournament_start_date": pd.Timestamp("2018-06-14"),
+        "player_name": "X",
+        "player_url_slug": "x",
+        "position": "GK",
+        "market_value_eur": 1_000_000,
+    }])
+    existing.to_parquet(output_path, index=False)
+
+    fetch_calls = []
+
+    def fake_fetch(*args, **kwargs):  # pragma: no cover - asserted not called
+        fetch_calls.append(args)
+        return None
+
+    with patch("mondiali.data.tm_rosters._fetch_roster_html", side_effect=fake_fetch):
+        n_added = scrape_rosters_all(
+            tournaments=["wc2018"],
+            nations=["France"],
+            cache_dir=cache_dir,
+            output_path=output_path,
+            resume=True,
+        )
+    assert n_added == 0
+    assert fetch_calls == []
+
+
+def test_scrape_rosters_uses_cache_without_network(tmp_path: Path) -> None:
+    """If cache HTML present, scraper parses it and never calls network."""
+    from mondiali.data.tm_rosters import scrape_rosters_all
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    fixture_html = (FIXTURE_DIR / "tm_roster_france_wc2018.html").read_text(encoding="utf-8")
+    from mondiali.data.tm_nations import NATION_TM_IDS
+    france_slug, _ = NATION_TM_IDS["France"]
+    (cache_dir / f"{france_slug}__wc2018.html").write_text(fixture_html, encoding="utf-8")
+
+    output_path = tmp_path / "rosters.parquet"
+
+    with patch("mondiali.data.tm_rosters._fetch_roster_html") as fetch_mock:
+        n_added = scrape_rosters_all(
+            tournaments=["wc2018"],
+            nations=["France"],
+            cache_dir=cache_dir,
+            output_path=output_path,
+            resume=False,
+        )
+    assert n_added == 1
+    assert fetch_mock.call_count == 0
+    df = pd.read_parquet(output_path)
+    assert len(df) == 5
+    assert set(df["player_url_slug"]) >= {"hugo-lloris", "kylian-mbappe"}
