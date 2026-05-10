@@ -9,9 +9,11 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import date
+from pathlib import Path
 
 from bs4 import BeautifulSoup
 
+from mondiali.data.tm_nations import NATION_TM_IDS
 from mondiali.data.transfermarkt import parse_value_eur
 
 TOURNAMENT_META: dict[str, dict[str, object]] = {
@@ -69,6 +71,34 @@ class RosterPlayer:
 
 
 _PLAYER_PROFILE_RE = re.compile(r"^/(?P<slug>[a-z0-9-]+)/profil/spieler/\d+")
+
+ROSTER_URL_TEMPLATE = (
+    "https://www.transfermarkt.com/{slug}/kader/verein/{tm_id}/saison_id/{saison}/plus/1"
+)
+
+
+def _build_roster_url(nation: str, tournament: str) -> str | None:
+    """Build Transfermarkt roster URL for a nation + tournament.
+
+    Returns None if nation or tournament is unknown.
+    """
+    entry = NATION_TM_IDS.get(nation)
+    meta = TOURNAMENT_META.get(tournament)
+    if entry is None or meta is None:
+        return None
+    slug, tm_id = entry
+    return ROSTER_URL_TEMPLATE.format(slug=slug, tm_id=tm_id, saison=meta["saison_id"])
+
+
+def _read_cached_roster(slug: str, tournament: str, cache_dir: Path) -> str | None:
+    """Read cached roster HTML by {slug}__{tournament}.html pattern.
+
+    Returns None if cache file does not exist.
+    """
+    p = cache_dir / f"{slug}__{tournament}.html"
+    if p.exists():
+        return p.read_text(encoding="utf-8")
+    return None
 
 
 def _parse_roster_html(html: str) -> list[RosterPlayer]:

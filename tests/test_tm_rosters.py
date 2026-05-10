@@ -59,3 +59,37 @@ def test_omonimi_disambiguati_via_slug() -> None:
     players = _parse_roster_html(html)
     slugs = {p.player_url_slug for p in players}
     assert slugs == {"diego-lopez", "diego-lopez-2"}
+
+
+def test_roster_url_uses_saison_year_minus_one() -> None:
+    """WC2018 → saison_id 2017 (TM stores roster under start-of-season year)."""
+    from mondiali.data.tm_rosters import _build_roster_url
+    url = _build_roster_url("France", "wc2018")
+    assert url is not None
+    assert "/saison_id/2017" in url
+    assert "/kader/verein/" in url
+
+
+def test_roster_url_returns_none_for_unknown_nation() -> None:
+    from mondiali.data.tm_rosters import _build_roster_url
+    assert _build_roster_url("Atlantis", "wc2018") is None
+
+
+def test_roster_url_returns_none_for_unknown_tournament() -> None:
+    from mondiali.data.tm_rosters import _build_roster_url
+    assert _build_roster_url("France", "wc1990") is None
+
+
+def test_cache_fast_path_returns_html_when_present(tmp_path: Path) -> None:
+    """If `{slug}__{tournament}.html` exists, _read_cached_roster reads it without network."""
+    from mondiali.data.tm_rosters import _read_cached_roster
+    cache_dir = tmp_path / "rosters"
+    cache_dir.mkdir()
+    (cache_dir / "equipe-de-france__wc2018.html").write_text("<html>cached</html>", encoding="utf-8")
+    out = _read_cached_roster("equipe-de-france", "wc2018", cache_dir)
+    assert out == "<html>cached</html>"
+
+
+def test_cache_fast_path_returns_none_when_missing(tmp_path: Path) -> None:
+    from mondiali.data.tm_rosters import _read_cached_roster
+    assert _read_cached_roster("nope", "wc2018", tmp_path) is None
