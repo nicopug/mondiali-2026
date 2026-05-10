@@ -6,7 +6,13 @@ Reuses cache fast-path machinery from `transfermarkt.py`.
 """
 from __future__ import annotations
 
+import re
+from dataclasses import dataclass
 from datetime import date
+
+from bs4 import BeautifulSoup
+
+from mondiali.data.transfermarkt import parse_value_eur
 
 TOURNAMENT_META: dict[str, dict[str, object]] = {
     "wc2018":   {"start": date(2018, 6, 14), "end": date(2018, 7, 15), "saison_id": 2017},
@@ -54,14 +60,6 @@ INJURY_STATUS_DOMAIN: frozenset[str] = frozenset({"out", "doubtful", "available"
 INJURY_SOURCE_DOMAIN: frozenset[str] = frozenset({"wikipedia_squads", "manual"})
 
 
-import re
-from dataclasses import dataclass
-
-from bs4 import BeautifulSoup
-
-from mondiali.data.transfermarkt import _parse_value_eur
-
-
 @dataclass(frozen=True)
 class RosterPlayer:
     player_name: str
@@ -100,7 +98,7 @@ def _parse_roster_html(html: str) -> list[RosterPlayer]:
         value_cell = row.select_one("td.rechts.hauptlink") or row.select_one("td.rechts")
         value: int | None = None
         if value_cell is not None:
-            parsed = _parse_value_eur(value_cell.get_text(strip=True))
+            parsed = parse_value_eur(value_cell.get_text(strip=True))
             value = int(parsed) if parsed is not None else None
         out.append(RosterPlayer(
             player_name=name, player_url_slug=slug,
