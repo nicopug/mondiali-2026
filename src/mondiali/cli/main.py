@@ -18,6 +18,7 @@ from mondiali.config import CONFIG
 from mondiali.data.ingestion import build_processed_matches, download_international_results
 from mondiali.data.scope import compute_tier3_scope
 from mondiali.data.tm_discover import discover_all_team_ids, rewrite_nations_file
+from mondiali.data.tm_rosters import TOURNAMENT_META, scrape_rosters_all
 from mondiali.data.transfermarkt import build_from_cache, scrape_all
 from mondiali.model.elo_logistic import EloLogisticBaseline
 from mondiali.training.baseline_prior import PriorBaseline
@@ -347,6 +348,37 @@ def tm_build_from_cache(
         f"OK - built {n_filled}/{n_target} snapshots from cache "
         f"({coverage:.1%}) -> {output_path}"
     )
+
+
+@app.command(name="tm-scrape-rosters")
+def tm_scrape_rosters(
+    tournaments: str = typer.Option(
+        "wc2018,euro2020,wc2022,euro2024",
+        "--tournaments",
+        help="Comma-separated tournament keys",
+    ),
+    resume: bool = typer.Option(True, "--resume/--no-resume"),
+) -> None:
+    """Scrape player-level rosters from Transfermarkt for historical tournaments.
+
+    Tier 4 enabler.
+    """
+    keys = [t.strip() for t in tournaments.split(",") if t.strip()]
+    unknown = [k for k in keys if k not in TOURNAMENT_META]
+    if unknown:
+        typer.echo(f"unknown tournaments: {unknown}", err=True)
+        raise typer.Exit(1)
+    cache_dir = CONFIG.data_raw / "transfermarkt" / "rosters"
+    output_path = CONFIG.data_raw / "transfermarkt" / "rosters.parquet"
+    typer.echo(f"Scraping rosters for {keys} -> {output_path}")
+    n_added = scrape_rosters_all(
+        tournaments=keys,
+        nations=None,
+        cache_dir=cache_dir,
+        output_path=output_path,
+        resume=resume,
+    )
+    typer.echo(f"Done. {n_added} new (nation, tournament) pairs added.")
 
 
 @app.command(name="tm-discover-ids")
