@@ -31,6 +31,7 @@ from mondiali.training.train import (
     train_tier1_pipeline,
     train_tier2_pipeline,
     train_tier3_pipeline,
+    train_tier4_pipeline,
 )
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
@@ -439,6 +440,52 @@ def tm_discover_ids() -> None:
     nations_file = Path(__file__).resolve().parent.parent / "data" / "tm_nations.py"
     rewrite_nations_file(mapping, nations_file)
     typer.echo(f"OK - riscritto {nations_file} con {len(mapping)} nazioni")
+
+
+@app.command(name="train-tier4")
+def train_tier4(
+    n_trials: int = typer.Option(100, "--n-trials"),
+    seed: int = typer.Option(42, "--seed"),
+) -> None:
+    """STEP 5 gate: Optuna double study (Tier 1+2+3 baseline vs +Tier 4 challenger)."""
+    matches_path = CONFIG.data_processed / "matches.parquet"
+    rosters_path = CONFIG.data_raw / "transfermarkt" / "rosters.parquet"
+    injuries_path = CONFIG.data_manual / "injuries.csv"
+    out_dir = CONFIG.models_dir / "tier4"
+    if not matches_path.exists():
+        typer.echo("matches.parquet missing", err=True)
+        raise typer.Exit(1)
+    if not rosters_path.exists():
+        typer.echo("rosters.parquet missing - run tm-scrape-rosters", err=True)
+        raise typer.Exit(1)
+    if not injuries_path.exists():
+        typer.echo("injuries.csv missing - run bootstrap-injuries", err=True)
+        raise typer.Exit(1)
+
+    result = train_tier4_pipeline(
+        matches_path=matches_path,
+        rosters_path=rosters_path,
+        injuries_path=injuries_path,
+        out_dir=out_dir,
+        n_trials=n_trials,
+        seed=seed,
+    )
+
+    typer.echo(
+        f"Splits: train={result['n_train']} val_es={result['n_val_es']} "
+        f"val_calib={result['n_val_calib']} val_gate={result['n_val_gate']}"
+    )
+    typer.echo(f"Dixon-Coles rho: {result['rho']:.4f}")
+    typer.echo(f"Tier 1+2+3 baseline log-loss:    {result['baseline_log_loss']:.4f}")
+    typer.echo(f"Tier 1+2+3+4 challenger log-loss: {result['challenger_log_loss']:.4f}")
+    typer.echo(f"Delta: {result['delta']:+.4f}  (negative = challenger better)")
+    typer.echo(f"Brier (gate): {result['brier']:.4f}")
+    if result["delta"] <= -0.003:
+        typer.echo(">>> GATE PASSED - Tier 4 promoted (delta <= -0.003)")
+    elif result["delta"] >= 0.003:
+        typer.echo(">>> GATE FAILED - Tier 4 NOT promoted (delta >= 0.003)")
+    else:
+        typer.echo(">>> NO DECISION - |delta| < 0.003. Review Brier + report manually.")
 
 
 if __name__ == "__main__":
