@@ -10,14 +10,17 @@ Sequenza:
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+import optuna
 import pandas as pd
 import structlog
 
 from mondiali.features.tier3 import TIER3_COLUMNS
+from mondiali.features.tier4 import TIER4_COLUMNS, add_tier4_features
 from mondiali.model.calibration import IsotonicCalibrator1X2
 from mondiali.model.dixon_coles import dixon_coles_correct, estimate_rho_mle, joint_matrix
 from mondiali.model.markets import prob_1x2
@@ -349,4 +352,189 @@ def train_tier3_pipeline(
         "n_train_pre2014_dropped": n_pre2014,
         "tm_coverage_train": _tm_coverage(train),
         "tm_coverage_gate": _tm_coverage(val_gate),
+    }
+
+
+def _train_calibrate_evaluate(
+    train: pd.DataFrame,
+    val_es: pd.DataFrame,
+    val_calib: pd.DataFrame,
+    val_gate: pd.DataFrame,
+    params: dict[str, Any],
+    *,
+    include_tier4: bool,
+    early_stopping_rounds: int = 50,
+) -> tuple[float, PoissonXGBModel, IsotonicCalibrator1X2, float, np.ndarray]:
+    """Fit + Dixon-Coles ρ + isotonic calibration → calibrated log-loss on gate.
+
+    Returns (log_loss_calib, model, calibrator, rho, gate_calibrated_probs).
+    """
+    model = PoissonXGBModel(params=params, include_tier4=include_tier4)
+    model.fit(train, early_stopping_val=val_es, early_stopping_rounds=early_stopping_rounds)
+    lam_h_tr, lam_a_tr = model.predict_lambda(train)
+    rho = estimate_rho_mle(
+        lam_h_tr, lam_a_tr,
+        train["home_score"].to_numpy(), train["away_score"].to_numpy(),
+    )
+    lam_h_cal, lam_a_cal = model.predict_lambda(val_calib)
+    raw_probs_calib = _compute_1x2_probs(lam_h_cal, lam_a_cal, rho=rho)
+    outcomes_calib = compute_outcomes(val_calib)
+    cal = IsotonicCalibrator1X2().fit(raw_probs_calib, outcomes_calib)
+    lam_h_ga, lam_a_ga = model.predict_lambda(val_gate)
+    raw_probs_gate = _compute_1x2_probs(lam_h_ga, lam_a_ga, rho=rho)
+    cal_probs_gate = cal.predict(raw_probs_gate)
+    loss = float(log_loss_1x2(val_gate, cal_probs_gate))
+    return loss, model, cal, rho, cal_probs_gate
+
+
+def _make_optuna_objective(
+    train: pd.DataFrame,
+    val_es: pd.DataFrame,
+    val_calib: pd.DataFrame,
+    val_gate: pd.DataFrame,
+    seed: int,
+    *,
+    include_tier4: bool,
+):
+    def objective(trial: optuna.Trial) -> float:
+        params = {
+            "max_depth": trial.suggest_int("max_depth", 3, 8),
+            "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
+            "n_estimators": trial.suggest_int("n_estimators", 200, 2000),
+            "min_child_weight": trial.suggest_int("min_child_weight", 1, 10),
+            "subsample": trial.suggest_float("subsample", 0.6, 1.0),
+            "colsample_bytree": trial.suggest_float("colsample_bytree", 0.6, 1.0),
+            "reg_alpha": trial.suggest_float("reg_alpha", 1e-3, 10, log=True),
+            "reg_lambda": trial.suggest_float("reg_lambda", 1e-3, 10, log=True),
+            "random_state": seed,
+        }
+        loss, *_ = _train_calibrate_evaluate(
+            train, val_es, val_calib, val_gate, params,
+            include_tier4=include_tier4,
+        )
+        return loss
+
+    return objective
+
+
+def train_tier4_pipeline(
+    matches_path: Path,
+    rosters_path: Path,
+    injuries_path: Path,
+    out_dir: Path,
+    *,
+    n_trials: int = 100,
+    seed: int = 42,
+    train_start: str = "2002-01-01",
+    train_end: str = "2016-12-31",
+    val_es_start: str = "2017-01-01",
+    val_es_end: str = "2017-12-31",
+    val_calib_start: str = "2018-01-01",
+    val_calib_end: str = "2021-12-31",
+    val_gate_start: str = "2022-01-01",
+    val_gate_end: str = "2022-12-31",
+) -> dict[str, Any]:
+    """Apples-to-apples double Optuna gate: Tier 1+2+3 baseline vs +Tier 4 challenger.
+
+    Both studies use the same TPESampler(seed) + identical splits + same isotonic
+    calibration. The only difference is whether the 4 Tier 4 columns are fed to
+    the XGBoost model. Saves baseline_params.json, challenger_params.json,
+    final challenger xgb_poisson.json + calibrator.json.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    df = pd.read_parquet(matches_path)
+    df["date"] = pd.to_datetime(df["date"])
+    df = df.dropna(subset=["days_rest_home", "days_rest_away"]).copy()
+
+    rosters = pd.read_parquet(rosters_path)
+    if Path(injuries_path).stat().st_size > 0:
+        injuries = pd.read_csv(injuries_path)
+    else:
+        injuries = pd.DataFrame(columns=[
+            "date_of_knowledge", "team", "tournament", "player_name",
+            "player_url_slug", "market_value_eur", "status", "source",
+        ])
+
+    df = add_tier4_features(df, rosters, injuries)
+    # Fill NaN tier4 columns with 0 so XGBoost handles consistently. The model
+    # treats NaN natively too but this aligns baseline (which ignores them) with
+    # challenger on rows where match is outside any tournament window.
+    for col in TIER4_COLUMNS:
+        df[col] = df[col].fillna(0.0)
+
+    train = df[
+        (df["date"] >= train_start) & (df["date"] <= train_end)
+    ].reset_index(drop=True)
+    val_es = df[
+        (df["date"] >= val_es_start) & (df["date"] <= val_es_end)
+    ].reset_index(drop=True)
+    val_calib = df[
+        (df["date"] >= val_calib_start) & (df["date"] <= val_calib_end)
+    ].reset_index(drop=True)
+    val_gate = df[
+        (df["date"] >= val_gate_start) & (df["date"] <= val_gate_end)
+    ].reset_index(drop=True)
+
+    log.info(
+        "tier4_pipeline_start",
+        n_train=len(train), n_val_es=len(val_es),
+        n_val_calib=len(val_calib), n_val_gate=len(val_gate),
+        n_trials=n_trials,
+    )
+
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+
+    log.info("optuna_baseline_start")
+    sampler_b = optuna.samplers.TPESampler(seed=seed)
+    study_b = optuna.create_study(direction="minimize", sampler=sampler_b)
+    study_b.optimize(
+        _make_optuna_objective(train, val_es, val_calib, val_gate, seed, include_tier4=False),
+        n_trials=n_trials,
+    )
+    baseline_loss = float(study_b.best_value)
+    baseline_params = dict(study_b.best_params)
+
+    log.info("optuna_challenger_start")
+    sampler_c = optuna.samplers.TPESampler(seed=seed)
+    study_c = optuna.create_study(direction="minimize", sampler=sampler_c)
+    study_c.optimize(
+        _make_optuna_objective(train, val_es, val_calib, val_gate, seed, include_tier4=True),
+        n_trials=n_trials,
+    )
+    challenger_loss = float(study_c.best_value)
+    challenger_params = dict(study_c.best_params)
+
+    # Refit final challenger with best params and save artifacts.
+    final_params = {**challenger_params, "random_state": seed}
+    final_loss, final_model, final_cal, rho, gate_probs = _train_calibrate_evaluate(
+        train, val_es, val_calib, val_gate, final_params, include_tier4=True,
+    )
+    brier = float(brier_score_1x2(val_gate, gate_probs))
+
+    final_model.save(out_dir / "xgb_poisson.json")
+    final_cal.save(out_dir / "calibrator.json")
+    (out_dir / "baseline_params.json").write_text(json.dumps(baseline_params, indent=2))
+    (out_dir / "challenger_params.json").write_text(json.dumps(challenger_params, indent=2))
+
+    delta = challenger_loss - baseline_loss
+    log.info(
+        "tier4_gate_complete",
+        baseline_log_loss=baseline_loss, challenger_log_loss=challenger_loss,
+        delta=delta, brier=brier, rho=rho,
+    )
+
+    return {
+        "baseline_log_loss": baseline_loss,
+        "challenger_log_loss": challenger_loss,
+        "delta": delta,
+        "brier": brier,
+        "rho": rho,
+        "final_log_loss": final_loss,
+        "n_train": len(train),
+        "n_val_es": len(val_es),
+        "n_val_calib": len(val_calib),
+        "n_val_gate": len(val_gate),
+        "baseline_params": baseline_params,
+        "challenger_params": challenger_params,
     }
