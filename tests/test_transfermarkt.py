@@ -15,7 +15,7 @@ from mondiali.data.transfermarkt import (
     _best_snapshot_for_year,
     _fetch_snapshot_html,
     _parse_squad_value,
-    _parse_value_eur,
+    parse_value_eur,
     _query_cdx,
     _wayback_url,
     build_from_cache,
@@ -41,9 +41,13 @@ FIXTURES_DIR = Path(__file__).parent / "fixtures"
     ("€-", None),
     ("-", None),
     ("", None),
+    # Unsupported suffixes (bn not implemented, only m/k/Mio/Mill/Tsd/Th)
+    ("€1.20bn", None),
+    # Defensive: random suffix should not match
+    ("€100xyz", None),
 ])
 def test_parse_value_eur(input_str, expected):
-    assert _parse_value_eur(input_str) == expected
+    assert parse_value_eur(input_str) == expected
 
 
 @pytest.mark.parametrize("fixture_name, expected_n, expected_total, expected_top11", [

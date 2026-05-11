@@ -44,7 +44,10 @@ class SquadValue:
 
 
 # US/EN format: "€80.00m", "€500k", "€1.50m"
-_VALUE_RE_US = re.compile(r"€\s*([\d.,]+)\s*([mk]?)", re.IGNORECASE)
+# Atomic group (?>...) prevents backtracking on the number, so unsupported suffixes
+# like "bn" correctly return None instead of partially matching "€1" from "€1.20bn".
+# Requires Python 3.11+ (atomic groups added in re module).
+_VALUE_RE_US = re.compile(r"€\s*((?>(?:\d+[.,])*\d+))\s*([mk]?)(?![a-zA-Z0-9])", re.IGNORECASE)
 # DE format: "20,50 Mill. €", "5,00 Tsd. €", "1,50 Mio. €", "75 Th. €"
 _VALUE_RE_DE = re.compile(r"([\d.,]+)\s+(Mio|Mill|Tsd|Th)\.?\s*€", re.IGNORECASE)
 
@@ -53,7 +56,7 @@ _DE_MULTIPLIERS = {"mio": 1_000_000.0, "mill": 1_000_000.0, "tsd": 1_000.0, "th"
 _US_MULTIPLIERS = {"m": 1_000_000.0, "k": 1_000.0}
 
 
-def _parse_value_eur(raw: str) -> float | None:
+def parse_value_eur(raw: str) -> float | None:
     """Parse TM market-value string in EUR (US o DE locale).
 
     Esempi:
@@ -92,7 +95,7 @@ def _parse_squad_value(html: str) -> SquadValue | None:
     """Parse pagina TM rosa nazionale. None se la pagina non contiene rosa.
 
     Cerca `table.items` (TM ≥2018) o `table#kader` (legacy), estrae celle
-    `td.rechts.hauptlink` (TM moderno) o `td.rechts` come fallback, parsa ogni valore via `_parse_value_eur`,
+    `td.rechts.hauptlink` (TM moderno) o `td.rechts` come fallback, parsa ogni valore via `parse_value_eur`,
     scarta None/<=0. Top-11 = somma dei 11 valori più alti.
     """
     soup = BeautifulSoup(html, "html.parser")
@@ -109,7 +112,7 @@ def _parse_squad_value(html: str) -> SquadValue | None:
 
     values: list[float] = []
     for cell in cells:
-        v = _parse_value_eur(cell.get_text(strip=True))
+        v = parse_value_eur(cell.get_text(strip=True))
         if v is not None and v > 0:
             values.append(v)
 

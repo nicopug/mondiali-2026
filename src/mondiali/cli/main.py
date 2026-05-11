@@ -16,8 +16,13 @@ import typer
 
 from mondiali.config import CONFIG
 from mondiali.data.ingestion import build_processed_matches, download_international_results
+from mondiali.data.injuries_bootstrap import (
+    bootstrap_injuries_for_tournament,
+    fetch_wikipedia_squads_html,
+)
 from mondiali.data.scope import compute_tier3_scope
 from mondiali.data.tm_discover import discover_all_team_ids, rewrite_nations_file
+from mondiali.data.tm_rosters import TOURNAMENT_META, scrape_rosters_all
 from mondiali.data.transfermarkt import build_from_cache, scrape_all
 from mondiali.model.elo_logistic import EloLogisticBaseline
 from mondiali.training.baseline_prior import PriorBaseline
@@ -26,6 +31,7 @@ from mondiali.training.train import (
     train_tier1_pipeline,
     train_tier2_pipeline,
     train_tier3_pipeline,
+    train_tier4_pipeline,
 )
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
@@ -349,6 +355,80 @@ def tm_build_from_cache(
     )
 
 
+@app.command(name="tm-scrape-rosters")
+def tm_scrape_rosters(
+    tournaments: str = typer.Option(
+        "wc2018,euro2020,wc2022,euro2024",
+        "--tournaments",
+        help="Comma-separated tournament keys",
+    ),
+    resume: bool = typer.Option(True, "--resume/--no-resume"),
+) -> None:
+    """Scrape player-level rosters from Transfermarkt for historical tournaments.
+
+    Tier 4 enabler.
+    """
+    keys = [t.strip() for t in tournaments.split(",") if t.strip()]
+    unknown = [k for k in keys if k not in TOURNAMENT_META]
+    if unknown:
+        typer.echo(f"unknown tournaments: {unknown}", err=True)
+        raise typer.Exit(1)
+    cache_dir = CONFIG.data_raw / "transfermarkt" / "rosters"
+    output_path = CONFIG.data_raw / "transfermarkt" / "rosters.parquet"
+    typer.echo(f"Scraping rosters for {keys} -> {output_path}")
+    n_added = scrape_rosters_all(
+        tournaments=keys,
+        nations=None,
+        cache_dir=cache_dir,
+        output_path=output_path,
+        resume=resume,
+    )
+    typer.echo(f"Done. {n_added} new (nation, tournament) pairs added.")
+
+
+@app.command(name="bootstrap-injuries")
+def bootstrap_injuries(
+    tournaments: str = typer.Option(
+        "wc2018,euro2020,wc2022,euro2024",
+        "--tournaments",
+        help="Comma-separated tournament keys",
+    ),
+) -> None:
+    """Bootstrap data/manual/injuries.csv from Wikipedia withdrawals sections."""
+    keys = [t.strip() for t in tournaments.split(",") if t.strip()]
+    unknown = [k for k in keys if k not in TOURNAMENT_META]
+    if unknown:
+        typer.echo(f"unknown tournaments: {unknown}", err=True)
+        raise typer.Exit(1)
+    rosters_path = CONFIG.data_raw / "transfermarkt" / "rosters.parquet"
+    if not rosters_path.exists():
+        typer.echo(
+            f"rosters.parquet not found at {rosters_path}; run tm-scrape-rosters first",
+            err=True,
+        )
+        raise typer.Exit(1)
+    rosters = pd.read_parquet(rosters_path)
+    csv_path = CONFIG.data_manual / "injuries.csv"
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    if not csv_path.exists():
+        csv_path.write_text(
+            "date_of_knowledge,team,tournament,player_name,player_url_slug,market_value_eur,status,source\n",
+            encoding="utf-8",
+        )
+    cache_dir = CONFIG.data_raw / "wikipedia" / "squads_cache"
+    grand_added = grand_skipped = 0
+    for t in keys:
+        html = fetch_wikipedia_squads_html(t, cache_dir)
+        if html is None:
+            typer.echo(f"  {t}: fetch failed, skipped")
+            continue
+        n_add, n_skip = bootstrap_injuries_for_tournament(t, html, rosters, csv_path)
+        typer.echo(f"  {t}: added={n_add} skipped_no_match={n_skip}")
+        grand_added += n_add
+        grand_skipped += n_skip
+    typer.echo(f"Done. total_added={grand_added} total_skipped_no_match={grand_skipped}")
+
+
 @app.command(name="tm-discover-ids")
 def tm_discover_ids() -> None:
     """Riscopre i veri TM IDs via schnellsuche live e riscrive `tm_nations.py`.
@@ -360,6 +440,52 @@ def tm_discover_ids() -> None:
     nations_file = Path(__file__).resolve().parent.parent / "data" / "tm_nations.py"
     rewrite_nations_file(mapping, nations_file)
     typer.echo(f"OK - riscritto {nations_file} con {len(mapping)} nazioni")
+
+
+@app.command(name="train-tier4")
+def train_tier4(
+    n_trials: int = typer.Option(100, "--n-trials"),
+    seed: int = typer.Option(42, "--seed"),
+) -> None:
+    """STEP 5 gate: Optuna double study (Tier 1+2+3 baseline vs +Tier 4 challenger)."""
+    matches_path = CONFIG.data_processed / "matches.parquet"
+    rosters_path = CONFIG.data_raw / "transfermarkt" / "rosters.parquet"
+    injuries_path = CONFIG.data_manual / "injuries.csv"
+    out_dir = CONFIG.models_dir / "tier4"
+    if not matches_path.exists():
+        typer.echo("matches.parquet missing", err=True)
+        raise typer.Exit(1)
+    if not rosters_path.exists():
+        typer.echo("rosters.parquet missing - run tm-scrape-rosters", err=True)
+        raise typer.Exit(1)
+    if not injuries_path.exists():
+        typer.echo("injuries.csv missing - run bootstrap-injuries", err=True)
+        raise typer.Exit(1)
+
+    result = train_tier4_pipeline(
+        matches_path=matches_path,
+        rosters_path=rosters_path,
+        injuries_path=injuries_path,
+        out_dir=out_dir,
+        n_trials=n_trials,
+        seed=seed,
+    )
+
+    typer.echo(
+        f"Splits: train={result['n_train']} val_es={result['n_val_es']} "
+        f"val_calib={result['n_val_calib']} val_gate={result['n_val_gate']}"
+    )
+    typer.echo(f"Dixon-Coles rho: {result['rho']:.4f}")
+    typer.echo(f"Tier 1+2+3 baseline log-loss:    {result['baseline_log_loss']:.4f}")
+    typer.echo(f"Tier 1+2+3+4 challenger log-loss: {result['challenger_log_loss']:.4f}")
+    typer.echo(f"Delta: {result['delta']:+.4f}  (negative = challenger better)")
+    typer.echo(f"Brier (gate): {result['brier']:.4f}")
+    if result["delta"] <= -0.003:
+        typer.echo(">>> GATE PASSED - Tier 4 promoted (delta <= -0.003)")
+    elif result["delta"] >= 0.003:
+        typer.echo(">>> GATE FAILED - Tier 4 NOT promoted (delta >= 0.003)")
+    else:
+        typer.echo(">>> NO DECISION - |delta| < 0.003. Review Brier + report manually.")
 
 
 if __name__ == "__main__":

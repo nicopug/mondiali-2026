@@ -47,6 +47,13 @@ SYMMETRIC_FEATURES: list[str] = [
     "opponent_tm_age_days",
 ]
 
+SYMMETRIC_FEATURES_TIER4_EXTRA: list[str] = [
+    "team_top5_absent_count",
+    "opponent_top5_absent_count",
+    "team_value_absent_ratio",
+    "opponent_value_absent_ratio",
+]
+
 DEFAULT_PARAMS: dict[str, Any] = {
     "objective": "count:poisson",
     "tree_method": "hist",
@@ -63,16 +70,22 @@ DEFAULT_PARAMS: dict[str, Any] = {
 }
 
 
-def build_symmetric_rows(matches: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:  # noqa: PLR0915
+def build_symmetric_rows(  # noqa: PLR0915
+    matches: pd.DataFrame, *, include_tier4: bool = False
+) -> tuple[np.ndarray, np.ndarray]:
     """Ritorna (X, y) dove per ogni match crea 2 righe consecutive.
 
     Ordine righe: [match0_home, match0_away, match1_home, match1_away, ...].
 
-    X shape: (2 * len(matches), len(SYMMETRIC_FEATURES))
-    y shape: (2 * len(matches),)
+    Quando ``include_tier4=True``, le 4 colonne Tier 4 vengono aggiunte alla X
+    (simmetrizzate home/away). Tier 4 features possono essere NaN e XGBoost
+    le gestisce nativamente.
     """
     n = len(matches)
-    X = np.empty((2 * n, len(SYMMETRIC_FEATURES)), dtype=float)  # noqa: N806
+    n_features = len(SYMMETRIC_FEATURES) + (
+        len(SYMMETRIC_FEATURES_TIER4_EXTRA) if include_tier4 else 0
+    )
+    X = np.empty((2 * n, n_features), dtype=float)  # noqa: N806
     y = np.empty(2 * n, dtype=float)
 
     home_elo = matches["home_elo_before"].to_numpy(dtype=float)
@@ -155,6 +168,21 @@ def build_symmetric_rows(matches: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]
     X[1::2, 23] = home_tm_age
     y[1::2] = a_goals
 
+    if include_tier4:
+        home_t5cnt = matches["home_top5_absent_count"].to_numpy(dtype=float)
+        away_t5cnt = matches["away_top5_absent_count"].to_numpy(dtype=float)
+        home_t5val = matches["home_value_absent_ratio"].to_numpy(dtype=float)
+        away_t5val = matches["away_value_absent_ratio"].to_numpy(dtype=float)
+        # team-perspective: team's own absences + opponent's absences
+        X[0::2, 24] = home_t5cnt
+        X[0::2, 25] = away_t5cnt
+        X[0::2, 26] = home_t5val
+        X[0::2, 27] = away_t5val
+        X[1::2, 24] = away_t5cnt
+        X[1::2, 25] = home_t5cnt
+        X[1::2, 26] = away_t5val
+        X[1::2, 27] = home_t5val
+
     return X, y
 
 
@@ -166,8 +194,14 @@ class PoissonXGBModel:
     (lambda_home, lambda_away) per ogni match.
     """
 
-    def __init__(self, params: dict[str, Any] | None = None) -> None:
+    def __init__(
+        self,
+        params: dict[str, Any] | None = None,
+        *,
+        include_tier4: bool = False,
+    ) -> None:
         self.params: dict[str, Any] = {**DEFAULT_PARAMS, **(params or {})}
+        self.include_tier4 = include_tier4
         self.booster_: xgb.XGBRegressor | None = None
 
     def fit(
@@ -178,10 +212,12 @@ class PoissonXGBModel:
         early_stopping_rounds: int = 50,
     ) -> PoissonXGBModel:
         """Addestra il modello. Se `early_stopping_val` è fornito, early stop."""
-        X, y = build_symmetric_rows(matches)  # noqa: N806
+        X, y = build_symmetric_rows(matches, include_tier4=self.include_tier4)  # noqa: N806
         fit_kwargs: dict[str, Any] = {}
         if early_stopping_val is not None:
-            X_val, y_val = build_symmetric_rows(early_stopping_val)  # noqa: N806
+            X_val, y_val = build_symmetric_rows(  # noqa: N806
+                early_stopping_val, include_tier4=self.include_tier4
+            )
             fit_kwargs["eval_set"] = [(X_val, y_val)]
             fit_kwargs["verbose"] = False
             params = {**self.params, "early_stopping_rounds": early_stopping_rounds}
@@ -196,7 +232,7 @@ class PoissonXGBModel:
         """Ritorna (lambda_home, lambda_away) per ogni match (shape (n,), (n,))."""
         if self.booster_ is None:
             raise RuntimeError("PoissonXGBModel must be fit() before predict_lambda")
-        X, _ = build_symmetric_rows(matches)  # noqa: N806
+        X, _ = build_symmetric_rows(matches, include_tier4=self.include_tier4)  # noqa: N806
         preds = self.booster_.predict(X)
         lam_h = preds[0::2]
         lam_a = preds[1::2]
