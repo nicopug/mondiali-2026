@@ -7,12 +7,14 @@ unmatched names are logged and skipped.
 from __future__ import annotations
 
 import re
+import time
 import unicodedata
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
 
 import pandas as pd
+import requests
 import structlog
 from bs4 import BeautifulSoup
 
@@ -28,6 +30,15 @@ log = structlog.get_logger(__name__)
 class WithdrawalEntry:
     team: str
     player_name: str
+
+
+WIKIPEDIA_URL_PATTERN = "https://en.wikipedia.org/wiki/{slug}"
+TOURNAMENT_WIKIPEDIA_SLUG: dict[str, str] = {
+    "wc2018": "2018_FIFA_World_Cup_squads",
+    "euro2020": "UEFA_Euro_2020_squads",
+    "wc2022": "2022_FIFA_World_Cup_squads",
+    "euro2024": "UEFA_Euro_2024_squads",
+}
 
 
 _WITHDRAWAL_HEADLINE_IDS = {"Withdrawals", "Pre-tournament_withdrawals", "Replacements"}
@@ -165,3 +176,32 @@ def bootstrap_injuries_for_tournament(
         n_skipped_no_match=n_skipped,
     )
     return len(new_rows), n_skipped
+
+
+def fetch_wikipedia_squads_html(tournament: str, cache_dir: Path) -> str | None:
+    """Fetch the Wikipedia squads HTML for ``tournament``, with on-disk cache.
+
+    Returns the page HTML, or ``None`` if the slug is unknown / fetch failed.
+    """
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cached = cache_dir / f"{tournament}.html"
+    if cached.exists():
+        return cached.read_text(encoding="utf-8")
+    slug = TOURNAMENT_WIKIPEDIA_SLUG.get(tournament)
+    if slug is None:
+        log.warning("no_wikipedia_slug", tournament=tournament)
+        return None
+    url = WIKIPEDIA_URL_PATTERN.format(slug=slug)
+    time.sleep(1.0)
+    try:
+        resp = requests.get(
+            url, timeout=30, headers={"User-Agent": "mondiali-research/0.1"}
+        )
+    except requests.RequestException as e:
+        log.warning("wikipedia_fetch_exception", error=str(e), url=url)
+        return None
+    if resp.status_code != 200:
+        log.warning("wikipedia_fetch_non200", status=resp.status_code, url=url)
+        return None
+    cached.write_text(resp.text, encoding="utf-8")
+    return resp.text

@@ -16,6 +16,10 @@ import typer
 
 from mondiali.config import CONFIG
 from mondiali.data.ingestion import build_processed_matches, download_international_results
+from mondiali.data.injuries_bootstrap import (
+    bootstrap_injuries_for_tournament,
+    fetch_wikipedia_squads_html,
+)
 from mondiali.data.scope import compute_tier3_scope
 from mondiali.data.tm_discover import discover_all_team_ids, rewrite_nations_file
 from mondiali.data.tm_rosters import TOURNAMENT_META, scrape_rosters_all
@@ -379,6 +383,49 @@ def tm_scrape_rosters(
         resume=resume,
     )
     typer.echo(f"Done. {n_added} new (nation, tournament) pairs added.")
+
+
+@app.command(name="bootstrap-injuries")
+def bootstrap_injuries(
+    tournaments: str = typer.Option(
+        "wc2018,euro2020,wc2022,euro2024",
+        "--tournaments",
+        help="Comma-separated tournament keys",
+    ),
+) -> None:
+    """Bootstrap data/manual/injuries.csv from Wikipedia withdrawals sections."""
+    keys = [t.strip() for t in tournaments.split(",") if t.strip()]
+    unknown = [k for k in keys if k not in TOURNAMENT_META]
+    if unknown:
+        typer.echo(f"unknown tournaments: {unknown}", err=True)
+        raise typer.Exit(1)
+    rosters_path = CONFIG.data_raw / "transfermarkt" / "rosters.parquet"
+    if not rosters_path.exists():
+        typer.echo(
+            f"rosters.parquet not found at {rosters_path}; run tm-scrape-rosters first",
+            err=True,
+        )
+        raise typer.Exit(1)
+    rosters = pd.read_parquet(rosters_path)
+    csv_path = CONFIG.data_manual / "injuries.csv"
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    if not csv_path.exists():
+        csv_path.write_text(
+            "date_of_knowledge,team,tournament,player_name,player_url_slug,market_value_eur,status,source\n",
+            encoding="utf-8",
+        )
+    cache_dir = CONFIG.data_raw / "wikipedia" / "squads_cache"
+    grand_added = grand_skipped = 0
+    for t in keys:
+        html = fetch_wikipedia_squads_html(t, cache_dir)
+        if html is None:
+            typer.echo(f"  {t}: fetch failed, skipped")
+            continue
+        n_add, n_skip = bootstrap_injuries_for_tournament(t, html, rosters, csv_path)
+        typer.echo(f"  {t}: added={n_add} skipped_no_match={n_skip}")
+        grand_added += n_add
+        grand_skipped += n_skip
+    typer.echo(f"Done. total_added={grand_added} total_skipped_no_match={grand_skipped}")
 
 
 @app.command(name="tm-discover-ids")
