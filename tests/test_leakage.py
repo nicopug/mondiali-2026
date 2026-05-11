@@ -19,6 +19,7 @@ import pytest
 from mondiali.config import CONFIG
 from mondiali.features.elo import EloSystem
 from mondiali.features.tier3 import TIER3_COLUMNS, add_tier3_features
+from mondiali.features.tier4 import add_tier4_features
 
 
 def _load_processed() -> pd.DataFrame | None:
@@ -183,3 +184,37 @@ def test_tier3_market_value_strict_pre_match() -> None:
     if len(pre2014):
         assert pre2014["home_market_value_total"].isna().all()
         assert pre2014["away_market_value_total"].isna().all()
+
+
+def test_tier4_strict_pre_match() -> None:
+    """Same-date injury must NOT be counted (strict < on date_of_knowledge)."""
+    matches = pd.DataFrame([
+        {"date": pd.Timestamp("2022-11-25"), "home_team": "France", "away_team": "Denmark"},
+        {"date": pd.Timestamp("2022-11-26"), "home_team": "Spain", "away_team": "Germany"},
+    ])
+    rosters = pd.DataFrame([
+        {
+            "nation": "France",
+            "tournament": "wc2022",
+            "tournament_start_date": pd.Timestamp("2022-11-20"),
+            "player_name": f"M{i}",
+            "player_url_slug": f"m{i}",
+            "position": "MID",
+            "market_value_eur": v,
+        }
+        for i, v in enumerate(
+            [100_000_000, 80_000_000, 60_000_000, 40_000_000, 20_000_000], start=1
+        )
+    ])
+    injuries = pd.DataFrame([{
+        "date_of_knowledge": pd.Timestamp("2022-11-25"),
+        "team": "France", "tournament": "wc2022",
+        "player_name": "M1", "player_url_slug": "m1",
+        "market_value_eur": 100_000_000, "status": "out", "source": "wikipedia_squads",
+    }])
+    out = add_tier4_features(matches, rosters, injuries)
+    france_row = out[out["home_team"] == "France"].iloc[0]
+    assert france_row["home_top5_absent_count"] == 0, (
+        "Tier 4 leaked: same-date injury was counted (must be strict <)"
+    )
+
