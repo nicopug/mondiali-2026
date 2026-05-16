@@ -114,6 +114,157 @@ def simulate_group(
     return df.sort_values("p_qualified", ascending=False).reset_index(drop=True)
 
 
+def simulate_tournament(
+    groups_cfg: dict[str, list[str]],
+    pair_lambdas: dict[tuple[str, str], tuple[float, float]],
+    rho: float,
+    *,
+    elo_dict: dict[str, float],
+    n_sims: int = 10000,
+    seed: int = 42,
+) -> pd.DataFrame:
+    """End-to-end Monte Carlo: groups + knockout in one simulation pass.
+
+    Returns per-team probabilities for each tournament stage. Unlike the
+    two-step approach where knockout is conditional on a fixed 32-team list,
+    this propagates group uncertainty into knockout probabilities (so a team
+    that's borderline qualifier gets P(reach R16) = P(qualif) * P(advance | qualif)).
+
+    Bracket pairing strategy: 32 qualifiers (12 winners + 12 runners-up + 8 best
+    thirds) seeded by Elo descending; seed 1 vs 32, 2 vs 31, etc. Pure positional
+    pairing — does NOT enforce FIFA's "same-group teams can't meet in R32" rule
+    (would require encoding the 495-scenario chart).
+    """
+    rng = np.random.default_rng(seed)
+    all_teams = [t for group in groups_cfg.values() for t in group]
+    team_to_idx = {t: i for i, t in enumerate(all_teams)}
+    n_teams = len(all_teams)
+
+    # Per-team counters
+    stage_counts = {
+        "p_first": np.zeros(n_teams, dtype=np.int64),
+        "p_second": np.zeros(n_teams, dtype=np.int64),
+        "p_third": np.zeros(n_teams, dtype=np.int64),
+        "p_third_advanced": np.zeros(n_teams, dtype=np.int64),
+        "p_qualified_r32": np.zeros(n_teams, dtype=np.int64),
+        "p_round_of_16": np.zeros(n_teams, dtype=np.int64),
+        "p_quarterfinal": np.zeros(n_teams, dtype=np.int64),
+        "p_semifinal": np.zeros(n_teams, dtype=np.int64),
+        "p_final": np.zeros(n_teams, dtype=np.int64),
+        "p_winner": np.zeros(n_teams, dtype=np.int64),
+    }
+    points_sum = np.zeros(n_teams, dtype=np.float64)
+    gd_sum = np.zeros(n_teams, dtype=np.float64)
+
+    # Pre-sample group match scores for vectorization
+    from collections import defaultdict
+    group_match_scores: dict[str, list[tuple[str, str, np.ndarray, np.ndarray]]] = defaultdict(list)
+    for group_letter, teams in groups_cfg.items():
+        for i in range(len(teams)):
+            for j in range(i + 1, len(teams)):
+                t_a, t_b = teams[i], teams[j]
+                lam_a, lam_b = pair_lambdas[(t_a, t_b)]
+                h, a = sample_match_scores(lam_a, lam_b, rho, n_sims=n_sims, rng=rng)
+                group_match_scores[group_letter].append((t_a, t_b, h, a))
+
+    # For each sim, compute group standings + qualifications + knockout
+    for s in range(n_sims):
+        # Group standings
+        group_standings: dict[str, list[tuple[str, int, int, int]]] = {}
+        thirds_pool: list[tuple[str, int, int, int]] = []  # (team, pts, gd, gf)
+        qualifiers_winners: list[str] = []
+        qualifiers_runnersup: list[str] = []
+
+        for group_letter, teams in groups_cfg.items():
+            pts = {t: 0 for t in teams}
+            gf = {t: 0 for t in teams}
+            ga = {t: 0 for t in teams}
+            for t_a, t_b, h, a in group_match_scores[group_letter]:
+                ha, ab = int(h[s]), int(a[s])
+                if ha > ab:
+                    pts[t_a] += 3
+                elif ha < ab:
+                    pts[t_b] += 3
+                else:
+                    pts[t_a] += 1; pts[t_b] += 1
+                gf[t_a] += ha; ga[t_a] += ab
+                gf[t_b] += ab; ga[t_b] += ha
+            # Tiebreak: pts desc, gd desc, gf desc, random
+            tiebreak = {t: rng.random() for t in teams}
+            ranked = sorted(
+                teams,
+                key=lambda t: (-pts[t], -(gf[t] - ga[t]), -gf[t], tiebreak[t]),
+            )
+            group_standings[group_letter] = [
+                (t, pts[t], gf[t] - ga[t], gf[t]) for t in ranked
+            ]
+            qualifiers_winners.append(ranked[0])
+            qualifiers_runnersup.append(ranked[1])
+            thirds_pool.append((ranked[2], pts[ranked[2]],
+                                gf[ranked[2]] - ga[ranked[2]], gf[ranked[2]]))
+            # Update counters + aggregates
+            for rank_idx, t in enumerate(ranked):
+                points_sum[team_to_idx[t]] += pts[t]
+                gd_sum[team_to_idx[t]] += gf[t] - ga[t]
+                if rank_idx == 0:
+                    stage_counts["p_first"][team_to_idx[t]] += 1
+                elif rank_idx == 1:
+                    stage_counts["p_second"][team_to_idx[t]] += 1
+                elif rank_idx == 2:
+                    stage_counts["p_third"][team_to_idx[t]] += 1
+
+        # Pick 8 best thirds
+        thirds_pool.sort(key=lambda x: (-x[1], -x[2], -x[3], rng.random()))
+        best_thirds = [x[0] for x in thirds_pool[:8]]
+        for t in best_thirds:
+            stage_counts["p_third_advanced"][team_to_idx[t]] += 1
+
+        qualifiers = qualifiers_winners + qualifiers_runnersup + best_thirds
+        for t in qualifiers:
+            stage_counts["p_qualified_r32"][team_to_idx[t]] += 1
+
+        # Seed by Elo descending → bracket 1 vs 32
+        seeded = sorted(qualifiers, key=lambda t: -elo_dict.get(t, 1500.0))
+        # R32 → R16 → QF → SF → Final
+        survivors = seeded
+        round_order = ["p_round_of_16", "p_quarterfinal",
+                       "p_semifinal", "p_final", "p_winner"]
+        for round_name in round_order:
+            next_round = []
+            n_pairs = len(survivors) // 2
+            for i in range(n_pairs):
+                t_a, t_b = survivors[i], survivors[len(survivors) - 1 - i]
+                lam_a, lam_b = pair_lambdas[(t_a, t_b)]
+                h, a = sample_match_scores(lam_a, lam_b, rho, n_sims=1, rng=rng)
+                if h[0] > a[0]:
+                    winner = t_a
+                elif h[0] < a[0]:
+                    winner = t_b
+                else:
+                    winner = t_a if rng.random() < 0.5 else t_b
+                next_round.append(winner)
+            for t in next_round:
+                stage_counts[round_name][team_to_idx[t]] += 1
+            # Re-sort survivors by Elo to keep a deterministic bracket each round
+            survivors = sorted(next_round, key=lambda t: -elo_dict.get(t, 1500.0))
+
+    # Build output DataFrame
+    rows = []
+    for i, t in enumerate(all_teams):
+        # Find team's group
+        team_group = next(g for g, ts in groups_cfg.items() if t in ts)
+        row = {
+            "team": t, "group": team_group,
+            "avg_points": float(points_sum[i] / n_sims),
+            "avg_gd": float(gd_sum[i] / n_sims),
+        }
+        for k, c in stage_counts.items():
+            row[k] = float(c[i] / n_sims)
+        rows.append(row)
+    df = pd.DataFrame(rows)
+    return df.sort_values(["p_winner", "p_qualified_r32"], ascending=False).reset_index(drop=True)
+
+
 def simulate_knockout_bracket(
     bracket: list[dict], match_predictor, *,
     n_sims: int = 10000, seed: int = 42,
