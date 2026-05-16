@@ -21,7 +21,11 @@ import structlog
 
 from mondiali.model.poisson_xgb import SYMMETRIC_FEATURES
 from mondiali.training.train import train_tier2_pipeline
-from mondiali.training.validate_markets import validate_all_markets
+from mondiali.training.validate_markets import (
+    SECONDARY_MARKETS,
+    fit_market_calibrators,
+    validate_all_markets,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -102,15 +106,35 @@ def freeze_v1_final(
     df["date"] = pd.to_datetime(df["date"])
     df = df.dropna(subset=["days_rest_home", "days_rest_away"])
     train = df[(df["date"] >= train_start) & (df["date"] <= train_end)].reset_index(drop=True)
+    val_calib = df[
+        (df["date"] >= val_calib_start) & (df["date"] <= val_calib_end)
+    ].reset_index(drop=True)
     val_gate = df[
         (df["date"] >= val_gate_start) & (df["date"] <= val_gate_end)
     ].reset_index(drop=True)
+
+    market_calibrators = fit_market_calibrators(
+        model=model, val_calib=val_calib, rho=rho,
+    )
     markets_metrics = validate_all_markets(
         model=model, train=train, val_gate=val_gate, rho=rho,
+        calibrators=market_calibrators,
     )
     (out_dir / "markets_validation.json").write_text(
         json.dumps(markets_metrics, indent=2)
     )
+    markets_calib_dir = out_dir / "markets_calibrators"
+    for market in SECONDARY_MARKETS:
+        if markets_metrics[market]["calibrator_kept"]:
+            market_calibrators[market].save(markets_calib_dir / f"{market}.json")
+            log.info("market calibrator saved", market=market)
+        else:
+            log.info(
+                "market calibrator skipped (Brier did not improve)",
+                market=market,
+                raw_brier=markets_metrics[market]["raw_brier"],
+                calib_brier=markets_metrics[market]["calib_brier"],
+            )
 
     manifest = {
         "version": "v1.0",

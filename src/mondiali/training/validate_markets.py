@@ -1,15 +1,21 @@
 """Per-market validation gate (Brier + log-loss vs baseline naive).
 
-For each secondary market (U/O 1.5/2.5/3.5, BTTS), compares the model's
-predictions against a constant ``baseline = market frequency on training set``.
+Two-stage pipeline:
+1. ``fit_market_calibrators(model, val_calib, rho)`` — fits a binary isotonic
+   per secondary market (U/O 1.5/2.5/3.5, BTTS) on the calibration slice.
+2. ``validate_all_markets(model, train, val_gate, rho, calibrators)`` — computes
+   Brier + log-loss per market on the gate slice, using the calibrated probs
+   when calibration improves Brier, otherwise raw.
 
 ``validated`` flag = ``model_brier < baseline_brier - BRIER_MARGIN``.
+``calibrated`` flag (per market) = whether the binary calibrator was kept.
 """
 from __future__ import annotations
 
 import numpy as np
 import pandas as pd
 
+from mondiali.model.calibration import BinaryMarketCalibrator
 from mondiali.model.dixon_coles import dixon_coles_correct, joint_matrix
 from mondiali.model.markets import prob_btts, prob_over_under
 from mondiali.model.poisson_xgb import PoissonXGBModel
@@ -18,6 +24,9 @@ BRIER_MARGIN = 0.005
 LOG_LOSS_EPS = 1e-9
 
 MARKETS_UO_LINES: tuple[float, ...] = (1.5, 2.5, 3.5)
+SECONDARY_MARKETS: tuple[str, ...] = (
+    "over_under_1_5", "over_under_2_5", "over_under_3_5", "btts",
+)
 
 
 def _binary_log_loss(y: np.ndarray, p: np.ndarray) -> float:
@@ -48,19 +57,17 @@ def _model_market_probs(
 ) -> dict[str, np.ndarray]:
     lam_h, lam_a = model.predict_lambda(matches)
     n = len(matches)
-    p = {
-        "over_under_1_5": np.zeros(n),
-        "over_under_2_5": np.zeros(n),
-        "over_under_3_5": np.zeros(n),
-        "btts": np.zeros(n),
-    }
+    p = {market: np.zeros(n) for market in SECONDARY_MARKETS}
     for i in range(n):
         joint = joint_matrix(float(lam_h[i]), float(lam_a[i]))
         joint = dixon_coles_correct(joint, float(lam_h[i]), float(lam_a[i]), rho)
-        for line in MARKETS_UO_LINES:
-            over, _ = prob_over_under(joint, threshold=line)
-            p[f"over_under_{int(line)}_{int(round((line - int(line)) * 10))}"][i] = over
+        over15, _ = prob_over_under(joint, threshold=1.5)
+        over25, _ = prob_over_under(joint, threshold=2.5)
+        over35, _ = prob_over_under(joint, threshold=3.5)
         btts_yes, _ = prob_btts(joint)
+        p["over_under_1_5"][i] = over15
+        p["over_under_2_5"][i] = over25
+        p["over_under_3_5"][i] = over35
         p["btts"][i] = btts_yes
     return p
 
@@ -70,45 +77,71 @@ def _market_baselines(train: pd.DataFrame) -> dict[str, float]:
     return {k: float(v.mean()) for k, v in outcomes.items()}
 
 
+def fit_market_calibrators(
+    *, model: PoissonXGBModel, val_calib: pd.DataFrame, rho: float,
+) -> dict[str, BinaryMarketCalibrator]:
+    """Fit one binary isotonic per secondary market on ``val_calib``."""
+    raw_probs = _model_market_probs(model, val_calib, rho)
+    outcomes = _market_outcomes(val_calib)
+    return {
+        market: BinaryMarketCalibrator().fit(raw_probs[market], outcomes[market])
+        for market in SECONDARY_MARKETS
+    }
+
+
 def validate_all_markets(
     *,
     model: PoissonXGBModel,
     train: pd.DataFrame,
     val_gate: pd.DataFrame,
     rho: float,
+    calibrators: dict[str, BinaryMarketCalibrator] | None = None,
     margin: float = BRIER_MARGIN,
 ) -> dict[str, dict]:
     """Compute Brier + log-loss per market on ``val_gate``.
 
-    ``train`` is used only to compute baseline naive frequencies.
-
-    Returns
-    -------
-    dict keyed by market name, each value containing:
-        - ``log_loss``, ``brier`` (model)
-        - ``baseline_log_loss``, ``baseline_brier`` (constant baseline)
-        - ``baseline_freq`` (training market frequency)
-        - ``validated`` (model_brier < baseline_brier - margin)
+    For each market: keep the calibrated probs only if their Brier improves
+    over the raw probs. Returns per-market dict including ``raw_brier``,
+    ``calib_brier``, ``brier`` (the kept one), ``calibrator_kept``, ``validated``.
     """
     baselines = _market_baselines(train)
     outcomes = _market_outcomes(val_gate)
-    model_probs = _model_market_probs(model, val_gate, rho)
+    raw_probs = _model_market_probs(model, val_gate, rho)
 
     result: dict[str, dict] = {}
-    for market in ("over_under_1_5", "over_under_2_5", "over_under_3_5", "btts"):
+    for market in SECONDARY_MARKETS:
         y = outcomes[market]
-        p = model_probs[market]
+        p_raw = raw_probs[market]
         p_base = np.full_like(y, baselines[market])
-        ll = _binary_log_loss(y, p)
-        br = _binary_brier(y, p)
+
+        raw_ll = _binary_log_loss(y, p_raw)
+        raw_br = _binary_brier(y, p_raw)
         ll_b = _binary_log_loss(y, p_base)
         br_b = _binary_brier(y, p_base)
+
+        calib_kept = False
+        calib_ll: float | None = None
+        calib_br: float | None = None
+        if calibrators is not None and market in calibrators:
+            p_calib = calibrators[market].predict(p_raw)
+            calib_ll = _binary_log_loss(y, p_calib)
+            calib_br = _binary_brier(y, p_calib)
+            calib_kept = bool(calib_br < raw_br)
+
+        chosen_ll = calib_ll if calib_kept and calib_ll is not None else raw_ll
+        chosen_br = calib_br if calib_kept and calib_br is not None else raw_br
+
         result[market] = {
-            "log_loss": ll,
-            "brier": br,
-            "baseline_log_loss": ll_b,
-            "baseline_brier": br_b,
+            "log_loss": float(chosen_ll),
+            "brier": float(chosen_br),
+            "raw_log_loss": float(raw_ll),
+            "raw_brier": float(raw_br),
+            "calib_log_loss": float(calib_ll) if calib_ll is not None else None,
+            "calib_brier": float(calib_br) if calib_br is not None else None,
+            "calibrator_kept": calib_kept,
+            "baseline_log_loss": float(ll_b),
+            "baseline_brier": float(br_b),
             "baseline_freq": float(baselines[market]),
-            "validated": bool(br < br_b - margin),
+            "validated": bool(chosen_br < br_b - margin),
         }
     return result

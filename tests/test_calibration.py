@@ -54,6 +54,23 @@ def test_calibrator_handles_zero_sum_row_with_fallback() -> None:
     np.testing.assert_allclose(out.sum(axis=1), 1.0, atol=1e-10)
 
 
+def test_binary_market_calibrator_roundtrip(tmp_path) -> None:
+    from mondiali.model.calibration import BinaryMarketCalibrator, MIN_PROB_FLOOR
+    rng = np.random.default_rng(7)
+    n = 500
+    raw = rng.beta(2, 3, size=n)
+    outcomes = (rng.random(n) < raw).astype(float)
+    cal = BinaryMarketCalibrator().fit(raw, outcomes)
+    out = cal.predict(raw)
+    assert out.shape == (n,)
+    assert (out >= MIN_PROB_FLOOR).all()
+    assert (out <= 1.0 - MIN_PROB_FLOOR).all()
+    path = tmp_path / "binary.json"
+    cal.save(path)
+    cal2 = BinaryMarketCalibrator.load(path)
+    np.testing.assert_allclose(cal.predict(raw), cal2.predict(raw))
+
+
 def test_calibrator_never_emits_zero_probability() -> None:
     """Floor invariant: nessuna probability calibrata può essere esattamente 0.
 

@@ -117,3 +117,49 @@ class IsotonicCalibrator1X2:
         cal.iso_draw_ = _deserialize_iso(data["iso_draw"])
         cal.iso_away_ = _deserialize_iso(data["iso_away"])
         return cal
+
+
+class BinaryMarketCalibrator:
+    """Isotonic calibrator for a single binary market (e.g. Over 2.5 yes/no).
+
+    Floor + clip-to-[MIN_PROB_FLOOR, 1 - MIN_PROB_FLOOR] applied at predict time
+    to prevent log-loss explosion on extreme inputs.
+    """
+
+    def __init__(self) -> None:
+        self.iso_: IsotonicRegression | None = None
+
+    def fit(self, probs: np.ndarray, outcomes: np.ndarray) -> BinaryMarketCalibrator:
+        if probs.ndim != 1:
+            raise ValueError(f"probs must be 1D, got shape {probs.shape}")
+        if probs.shape[0] != outcomes.shape[0]:
+            raise ValueError("probs and outcomes length mismatch")
+        self.iso_ = IsotonicRegression(
+            out_of_bounds="clip", y_min=0.0, y_max=1.0,
+        ).fit(probs, outcomes.astype(float))
+        return self
+
+    def predict(self, probs: np.ndarray) -> np.ndarray:
+        if self.iso_ is None:
+            raise RuntimeError("Calibrator must be fit() before predict()")
+        out = self.iso_.predict(probs)
+        return np.clip(out, MIN_PROB_FLOOR, 1.0 - MIN_PROB_FLOOR)
+
+    def save(self, path: Path) -> None:
+        if self.iso_ is None:
+            raise RuntimeError("Calibrator must be fit() before save()")
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({
+            "version": 1, "iso": _serialize_iso(self.iso_),
+        }, indent=2))
+
+    @classmethod
+    def load(cls, path: Path) -> BinaryMarketCalibrator:
+        path = Path(path)
+        if not path.exists():
+            raise FileNotFoundError(path)
+        data = json.loads(path.read_text())
+        cal = cls()
+        cal.iso_ = _deserialize_iso(data["iso"])
+        return cal

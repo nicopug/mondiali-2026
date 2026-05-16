@@ -13,7 +13,7 @@ import pandas as pd
 
 from mondiali.features.tier3 import add_tier3_features
 from mondiali.inference.state import FORM_WINDOW
-from mondiali.model.calibration import IsotonicCalibrator1X2
+from mondiali.model.calibration import BinaryMarketCalibrator, IsotonicCalibrator1X2
 from mondiali.model.dixon_coles import dixon_coles_correct, joint_matrix
 from mondiali.model.markets import prob_1x2, prob_btts, prob_over_under
 from mondiali.model.poisson_xgb import PoissonXGBModel
@@ -172,10 +172,33 @@ def predict_match(
         p_home, p_draw, p_away = p_home_raw, p_draw_raw, p_away_raw
         calibrated = False
 
-    over15, under15 = prob_over_under(joint, threshold=1.5)
-    over25, under25 = prob_over_under(joint, threshold=2.5)
-    over35, under35 = prob_over_under(joint, threshold=3.5)
-    btts_yes, btts_no = prob_btts(joint)
+    over15, _ = prob_over_under(joint, threshold=1.5)
+    over25, _ = prob_over_under(joint, threshold=2.5)
+    over35, _ = prob_over_under(joint, threshold=3.5)
+    btts_yes, _ = prob_btts(joint)
+
+    markets_calib_dir = model_dir / "markets_calibrators"
+    market_p = {
+        "over_under_1_5": over15,
+        "over_under_2_5": over25,
+        "over_under_3_5": over35,
+        "btts": btts_yes,
+    }
+    market_calibrated: dict[str, bool] = {}
+    for market, raw_p in list(market_p.items()):
+        calib_path = markets_calib_dir / f"{market}.json"
+        if calib_path.exists():
+            cal = BinaryMarketCalibrator.load(calib_path)
+            market_p[market] = float(cal.predict(np.array([raw_p]))[0])
+            market_calibrated[market] = True
+        else:
+            market_calibrated[market] = False
+    over15, over25, over35, btts_yes = (
+        market_p["over_under_1_5"], market_p["over_under_2_5"],
+        market_p["over_under_3_5"], market_p["btts"],
+    )
+    under15, under25, under35 = 1 - over15, 1 - over25, 1 - over35
+    btts_no = 1 - btts_yes
 
     validation_path = model_dir / "markets_validation.json"
     validated = {}
@@ -199,12 +222,16 @@ def predict_match(
             "1x2": {"home": p_home, "draw": p_draw, "away": p_away,
                     "calibrated": calibrated},
             "over_under_1_5": {"over": float(over15), "under": float(under15),
+                               "calibrated": market_calibrated["over_under_1_5"],
                                "validated": validated.get("over_under_1_5", False)},
             "over_under_2_5": {"over": float(over25), "under": float(under25),
+                               "calibrated": market_calibrated["over_under_2_5"],
                                "validated": validated.get("over_under_2_5", False)},
             "over_under_3_5": {"over": float(over35), "under": float(under35),
+                               "calibrated": market_calibrated["over_under_3_5"],
                                "validated": validated.get("over_under_3_5", False)},
             "btts": {"yes": float(btts_yes), "no": float(btts_no),
+                     "calibrated": market_calibrated["btts"],
                      "validated": validated.get("btts", False)},
         },
     }
