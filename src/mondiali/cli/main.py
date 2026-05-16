@@ -36,6 +36,7 @@ from mondiali.training.train import (
     train_tier3_pipeline,
     train_tier4_pipeline,
 )
+from mondiali.training.train_tier7 import train_tier7_pipeline
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
 log = structlog.get_logger(__name__)
@@ -601,6 +602,47 @@ def freeze_v1(
             f"  {market}: brier={metrics['brier']:.4f} "
             f"vs baseline={metrics['baseline_brier']:.4f} {verdict}"
         )
+
+
+@app.command(name="train-tier7")
+def train_tier7(
+    embed_dim: int = typer.Option(16, "--embed-dim"),
+    hidden: str = typer.Option("128,64", "--hidden"),
+    dropout: float = typer.Option(0.2, "--dropout"),
+    lr: float = typer.Option(1e-3, "--lr"),
+    batch_size: int = typer.Option(512, "--batch-size"),
+    max_epochs: int = typer.Option(100, "--max-epochs"),
+    patience: int = typer.Option(10, "--patience"),
+    seed: int = typer.Option(42, "--seed"),
+) -> None:
+    """Tier 7 DL gate: team-embedding MLP Poisson vs v1_final raw log-loss."""
+    from mondiali.model.dl_poisson import DLConfig
+    matches_path = CONFIG.data_processed / "matches.parquet"
+    if not matches_path.exists():
+        typer.echo("matches.parquet missing - run `mondiali ingest` first", err=True)
+        raise typer.Exit(1)
+    out_dir = CONFIG.models_dir / "tier7"
+    cfg = DLConfig(
+        embed_dim=embed_dim,
+        hidden_dims=tuple(int(x) for x in hidden.split(",")),
+        dropout=dropout, lr=lr, batch_size=batch_size,
+        max_epochs=max_epochs, patience=patience, seed=seed,
+    )
+    result = train_tier7_pipeline(matches_path, out_dir, config=cfg)
+    typer.echo(f"Splits: train={result['n_train']} val_es={result['n_val_es']} "
+               f"val_calib={result['n_val_calib']} val_gate={result['n_val_gate']}")
+    typer.echo(f"Teams: {result['n_teams']}")
+    typer.echo(f"Dixon-Coles rho: {result['rho']:.4f}")
+    typer.echo(f"Tier 7 gate log-loss (raw): {result['gate_log_loss_raw']:.4f}")
+    typer.echo(f"v1_final raw baseline:      {result['v1_final_raw_log_loss']:.4f}")
+    typer.echo(f"Delta vs v1: {result['delta_vs_v1']:+.4f}  "
+               f"(negative = Tier 7 better)")
+    if result["promoted"]:
+        typer.echo(">>> GATE PASSED - Tier 7 beats v1_final by >0.005")
+    elif result["delta_vs_v1"] < 0:
+        typer.echo(">>> CLOSE - Tier 7 better but not by margin (need <-0.005)")
+    else:
+        typer.echo(">>> GATE FAILED - Tier 7 worse than v1_final raw")
 
 
 @app.command(name="update-state")
