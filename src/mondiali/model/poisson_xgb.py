@@ -210,8 +210,14 @@ class PoissonXGBModel:
         *,
         early_stopping_val: pd.DataFrame | None = None,
         early_stopping_rounds: int = 50,
+        sample_weight: np.ndarray | None = None,
     ) -> PoissonXGBModel:
-        """Addestra il modello. Se `early_stopping_val` è fornito, early stop."""
+        """Addestra il modello. Se `early_stopping_val` è fornito, early stop.
+
+        ``sample_weight`` (per-row weights, length 2 * n_matches): used for
+        time-decay weighting where recent matches matter more. If a per-match
+        weight is desired, pass each weight twice (symmetric expansion).
+        """
         X, y = build_symmetric_rows(matches, include_tier4=self.include_tier4)  # noqa: N806
         fit_kwargs: dict[str, Any] = {}
         if early_stopping_val is not None:
@@ -223,9 +229,16 @@ class PoissonXGBModel:
             params = {**self.params, "early_stopping_rounds": early_stopping_rounds}
         else:
             params = self.params
+        if sample_weight is not None:
+            if len(sample_weight) != len(X):
+                raise ValueError(
+                    f"sample_weight length {len(sample_weight)} != X rows {len(X)}"
+                )
+            fit_kwargs["sample_weight"] = sample_weight
         self.booster_ = xgb.XGBRegressor(**params)
         self.booster_.fit(X, y, **fit_kwargs)
-        log.info("poisson_xgb fit done", n_rows=len(X))
+        log.info("poisson_xgb fit done", n_rows=len(X),
+                 sample_weighted=sample_weight is not None)
         return self
 
     def predict_lambda(self, matches: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:

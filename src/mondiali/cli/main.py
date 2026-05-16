@@ -24,6 +24,7 @@ from mondiali.data.scope import compute_tier3_scope
 from mondiali.data.tm_discover import discover_all_team_ids, rewrite_nations_file
 from mondiali.data.tm_rosters import TOURNAMENT_META, scrape_rosters_all
 from mondiali.data.transfermarkt import build_from_cache, scrape_all
+from mondiali.inference.nation_resolver import NationNotFound, NationResolver
 from mondiali.inference.predict import predict_match
 from mondiali.inference.state import save_state
 from mondiali.model.elo_logistic import EloLogisticBaseline
@@ -492,6 +493,30 @@ def train_tier4(
         typer.echo(">>> NO DECISION - |delta| < 0.003. Review Brier + report manually.")
 
 
+def _validate_predict_inputs(home: str, away: str, date: str) -> tuple[str, str, pd.Timestamp]:
+    """Sanity checks: parse date, ensure home != away, resolve names."""
+    try:
+        d = pd.Timestamp(date)
+    except (ValueError, TypeError) as exc:
+        typer.echo(f"Invalid date '{date}': {exc}", err=True)
+        raise typer.Exit(2)
+    if d.year < 1900 or d.year > 2099:
+        typer.echo(f"Date out of sensible range: {d.date()}", err=True)
+        raise typer.Exit(2)
+    state_dir = CONFIG.project_root / "data" / "state"
+    resolver = NationResolver.from_state_dir(state_dir)
+    try:
+        home_canon = resolver.resolve(home)
+        away_canon = resolver.resolve(away)
+    except NationNotFound as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(2)
+    if home_canon == away_canon:
+        typer.echo(f"Home and away must differ (both resolved to '{home_canon}')", err=True)
+        raise typer.Exit(2)
+    return home_canon, away_canon, d
+
+
 @app.command()
 def predict(
     home: str,
@@ -500,22 +525,22 @@ def predict(
     neutral: bool = typer.Option(False, "--neutral"),
     competition_importance: float = typer.Option(30.0, "--competition-importance"),
     model_dir: str = typer.Option("", "--model-dir"),
+    explain: bool = typer.Option(False, "--explain", help="Include SHAP feature contributions"),
 ) -> None:
     """Predict 1X2 + U/O 1.5/2.5/3.5 + BTTS for a single match (JSON output)."""
+    home_canon, away_canon, d = _validate_predict_inputs(home, away, date)
     model_path = Path(model_dir) if model_dir else CONFIG.models_dir / "v1_final"
     if not (model_path / "xgb_poisson.json").exists():
         typer.echo(f"Model not found at {model_path} - run `mondiali freeze-v1` first", err=True)
         raise typer.Exit(1)
     state_dir = CONFIG.project_root / "data" / "state"
-    if not (state_dir / "elo_state.parquet").exists():
-        typer.echo("State missing - run `mondiali update-state` first", err=True)
-        raise typer.Exit(1)
     snapshots_path = CONFIG.data_raw / "transfermarkt" / "snapshots.parquet"
     out = predict_match(
-        home=home, away=away, date=pd.Timestamp(date), neutral=neutral,
+        home=home_canon, away=away_canon, date=d, neutral=neutral,
         state_dir=state_dir, model_dir=model_path,
         tm_snapshots_path=snapshots_path,
         competition_importance=competition_importance,
+        explain=explain,
     )
     typer.echo(json.dumps(out, indent=2))
 

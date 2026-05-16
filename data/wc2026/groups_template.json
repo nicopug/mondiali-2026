@@ -1,0 +1,21 @@
+{
+  "_comment": "FIFA World Cup 2026 group stage template. Replace teams with actual draw when known. Format: 12 groups (A-L) of 4 teams. Each group will play 6 matches round-robin. Host nations (USA, Mexico, Canada) auto-qualified. Default neutral=false for host group games on their home soil; the script applies neutral=true for non-host matches.",
+  "tournament": "FIFA World Cup 2026",
+  "start_date": "2026-06-11",
+  "competition_importance": 75.0,
+  "host_nations": ["United States", "Mexico", "Canada"],
+  "groups": {
+    "A": ["Mexico", "Canada", "Argentina", "Belgium"],
+    "B": ["United States", "Brazil", "Italy", "Germany"],
+    "C": ["England", "France", "Netherlands", "Croatia"],
+    "D": ["Spain", "Portugal", "Switzerland", "Denmark"],
+    "E": ["Uruguay", "Colombia", "Senegal", "Morocco"],
+    "F": ["Korea Republic", "Japan", "Australia", "Iran"],
+    "G": ["Poland", "Sweden", "Austria", "Norway"],
+    "H": ["Ecuador", "Peru", "Chile", "Paraguay"],
+    "I": ["Tunisia", "Algeria", "Nigeria", "Cameroon"],
+    "J": ["Egypt", "Ivory Coast", "Mali", "Ghana"],
+    "K": ["Costa Rica", "Panama", "Jamaica", "Honduras"],
+    "L": ["Saudi Arabia", "Qatar", "United Arab Emirates", "Iraq"]
+  }
+}

@@ -130,6 +130,7 @@ def predict_match(
     model_dir: Path,
     tm_snapshots_path: Path | None = None,
     competition_importance: float = 30.0,
+    explain: bool = False,
 ) -> dict:
     """Predict 5 markets (1X2 + 3×U/O + BTTS) for a single match.
 
@@ -244,7 +245,7 @@ def predict_match(
         if manifest_path.exists() else "unknown"
     )
 
-    return {
+    out_dict: dict = {
         "match": {"home": home, "away": away, "date": str(pd.Timestamp(date).date()),
                   "neutral": neutral},
         "model_version": model_version,
@@ -267,3 +268,119 @@ def predict_match(
                      "validated": validated.get("btts", False)},
         },
     }
+    if explain and xgb_model.booster_ is not None:
+        from mondiali.inference.explain import explain_prediction
+        out_dict["explanation"] = explain_prediction(row, xgb_model.booster_, top_k=3)
+    return out_dict
+
+
+class BatchPredictor:
+    """Cached model + state loader for high-throughput batch prediction.
+
+    Loads XGB + ensemble DL artefacts ONCE and reuses for many matches.
+    Use for Monte Carlo simulations and large fixture batches where the
+    per-call model-load cost of ``predict_match`` is prohibitive.
+    """
+
+    def __init__(
+        self, model_dir: Path, state_dir: Path,
+        tm_snapshots_path: Path | None = None,
+    ) -> None:
+        from mondiali.inference.state import load_state
+        self.model_dir = Path(model_dir)
+        self.state_dir = Path(state_dir)
+        self.elo_state, self.form_cache = load_state(state_dir)
+        self.tm_snapshots = (
+            pd.read_parquet(tm_snapshots_path)
+            if tm_snapshots_path is not None and tm_snapshots_path.exists()
+            else None
+        )
+        self.xgb_model = PoissonXGBModel().load(self.model_dir / "xgb_poisson.json")
+        self.rho_xgb = float((self.model_dir / "rho.txt").read_text().strip())
+        ens_path = self.model_dir / "ensemble.json"
+        if ens_path.exists():
+            ens = json.loads(ens_path.read_text())
+            self.w_xgb = float(ens["weight_xgb"])
+            self.w_l1 = float(ens.get("weight_l1", ens.get("weight_dl", 0.0)))
+            self.w_l3 = float(ens.get("weight_l3", 0.0))
+            self.rho_active = float(ens["rho_ensemble"])
+            if self.w_l1 > 1e-3 and (self.model_dir / "dl").exists():
+                from mondiali.model.dl_poisson import load_dl_model
+                self.l1_model, self.l1_idx, self.l1_stats, _ = load_dl_model(
+                    self.model_dir / "dl"
+                )
+            else:
+                self.l1_model = None
+            if self.w_l3 > 1e-3 and (self.model_dir / "l3").exists():
+                from mondiali.model.dl_bivariate import load_bivariate
+                self.l3_model, self.l3_idx, self.l3_stats, _ = load_bivariate(
+                    self.model_dir / "l3"
+                )
+            else:
+                self.l3_model = None
+        else:
+            self.w_xgb, self.w_l1, self.w_l3 = 1.0, 0.0, 0.0
+            self.rho_active = self.rho_xgb
+            self.l1_model = None
+            self.l3_model = None
+
+    def predict_lambdas(
+        self, matches_df: pd.DataFrame,
+    ) -> tuple[np.ndarray, np.ndarray, float]:
+        """Vectorized lambda prediction for many matches.
+
+        ``matches_df`` rows must contain columns produced by build_inference_row.
+        Returns (lam_home, lam_away, rho_active).
+        """
+        lam_h_xgb, lam_a_xgb = self.xgb_model.predict_lambda(matches_df)
+        lam_h = self.w_xgb * lam_h_xgb
+        lam_a = self.w_xgb * lam_a_xgb
+        if self.l1_model is not None:
+            from mondiali.model.dl_poisson import predict_lambda as l1_predict
+            lh1, la1 = l1_predict(self.l1_model, matches_df, self.l1_idx, self.l1_stats)
+            lam_h = lam_h + self.w_l1 * lh1
+            lam_a = lam_a + self.w_l1 * la1
+        if self.l3_model is not None:
+            from mondiali.model.dl_bivariate import predict_lambda_rho
+            lh3, la3, _ = predict_lambda_rho(
+                self.l3_model, matches_df, self.l3_idx, self.l3_stats,
+            )
+            lam_h = lam_h + self.w_l3 * lh3
+            lam_a = lam_a + self.w_l3 * la3
+        return lam_h, lam_a, self.rho_active
+
+    def build_row(
+        self, home: str, away: str, date: pd.Timestamp, *,
+        neutral: bool = True, competition_importance: float = 75.0,
+    ) -> pd.DataFrame:
+        """Build the runtime inference row for a single match."""
+        return build_inference_row(
+            home=home, away=away, date=pd.Timestamp(date), neutral=neutral,
+            elo_state=self.elo_state, form_cache=self.form_cache,
+            tm_snapshots=self.tm_snapshots,
+            competition_importance=competition_importance,
+        )
+
+    def predict_pair_cache(
+        self, teams: list[str], date: pd.Timestamp, *,
+        neutral: bool = True, competition_importance: float = 75.0,
+    ) -> dict[tuple[str, str], tuple[float, float]]:
+        """Predict (lam_a, lam_b) for ALL ordered pairs (a, b) of distinct teams.
+
+        Use as a fast lookup during knockout MC where each pairing may be
+        revisited many times across simulations.
+        """
+        pairs = [(a, b) for a in teams for b in teams if a != b]
+        rows = []
+        for a, b in pairs:
+            row = self.build_row(
+                a, b, date, neutral=neutral,
+                competition_importance=competition_importance,
+            )
+            rows.append(row.iloc[0])
+        matches_df = pd.DataFrame(rows).reset_index(drop=True)
+        lam_h, lam_a, _ = self.predict_lambdas(matches_df)
+        return {
+            (a, b): (float(lam_h[i]), float(lam_a[i]))
+            for i, (a, b) in enumerate(pairs)
+        }
