@@ -162,8 +162,8 @@ def predict_match(
     p_home_raw, p_draw_raw, p_away_raw = prob_1x2(joint)
     calibrator_path = model_dir / "calibrator.json"
     if calibrator_path.exists():
-        calibrator = IsotonicCalibrator1X2().load(calibrator_path)
-        probs_calib = calibrator.transform(
+        calibrator = IsotonicCalibrator1X2.load(calibrator_path)
+        probs_calib = calibrator.predict(
             np.array([[p_home_raw, p_draw_raw, p_away_raw]])
         )[0]
         p_home, p_draw, p_away = float(probs_calib[0]), float(probs_calib[1]), float(probs_calib[2])
