@@ -119,6 +119,64 @@ class IsotonicCalibrator1X2:
         return cal
 
 
+class PlattCalibrator1X2:
+    """Multinomial logistic regression calibrator for 1X2 probabilities.
+
+    Less prone to overfitting than isotonic on small calibration sets.
+    Fits logit(p_calib) = a + b · logit(p_raw) per class, then softmax-normalizes.
+    """
+
+    def __init__(self) -> None:
+        from sklearn.linear_model import LogisticRegression
+        self._cls = LogisticRegression  # captured for re-instantiation in fit/load
+        self.coef_: np.ndarray | None = None  # shape (3, 4) — [class][a, b_home, b_draw, b_away]
+        self.intercept_: np.ndarray | None = None  # shape (3,)
+
+    @staticmethod
+    def _logit(p: np.ndarray) -> np.ndarray:
+        eps = 1e-6
+        p = np.clip(p, eps, 1.0 - eps)
+        return np.log(p / (1.0 - p))
+
+    def fit(self, probs: np.ndarray, outcomes: np.ndarray) -> PlattCalibrator1X2:
+        if probs.shape[1] != 3:
+            raise ValueError(f"probs must have 3 columns, got {probs.shape}")
+        from sklearn.linear_model import LogisticRegression
+        X = self._logit(probs)  # (n, 3) features = logit of each raw prob
+        # sklearn>=1.7 dropped multi_class arg (multinomial is auto for 3+ classes)
+        model = LogisticRegression(solver="lbfgs", max_iter=500, C=1.0)
+        model.fit(X, outcomes)
+        self.coef_ = model.coef_  # (n_classes=3, n_features=3)
+        self.intercept_ = model.intercept_
+        return self
+
+    def predict(self, probs: np.ndarray) -> np.ndarray:
+        if self.coef_ is None or self.intercept_ is None:
+            raise RuntimeError("Calibrator must be fit() before predict()")
+        X = self._logit(probs)
+        logits = X @ self.coef_.T + self.intercept_
+        exp_logits = np.exp(logits - logits.max(axis=1, keepdims=True))
+        return exp_logits / exp_logits.sum(axis=1, keepdims=True)
+
+    def save(self, path: Path) -> None:
+        if self.coef_ is None or self.intercept_ is None:
+            raise RuntimeError("fit() before save()")
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        Path(path).write_text(json.dumps({
+            "version": 1,
+            "coef": self.coef_.tolist(),
+            "intercept": self.intercept_.tolist(),
+        }, indent=2))
+
+    @classmethod
+    def load(cls, path: Path) -> PlattCalibrator1X2:
+        data = json.loads(Path(path).read_text())
+        c = cls()
+        c.coef_ = np.array(data["coef"])
+        c.intercept_ = np.array(data["intercept"])
+        return c
+
+
 class BinaryMarketCalibrator:
     """Isotonic calibrator for a single binary market (e.g. Over 2.5 yes/no).
 

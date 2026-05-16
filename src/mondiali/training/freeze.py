@@ -79,6 +79,8 @@ def freeze_v1_final(
     val_calib_start: str = "2023-01-01",
     val_calib_end: str = "2023-12-31",
     snapshots_path: Path | None = None,
+    n_l3_seeds: int = 3,
+    n_l1_seeds: int = 1,
 ) -> dict[str, Any]:
     """Refit Tier 2 with refreshed splits and write all freeze artefacts."""
     out_dir = Path(out_dir)
@@ -133,6 +135,7 @@ def freeze_v1_final(
     ensemble_info = _train_and_persist_dl_ensemble(
         train=train, val_es=val_es, val_calib=val_calib, val_gate=val_gate,
         xgb_model=model, xgb_rho=rho, out_dir=out_dir,
+        n_l3_seeds=n_l3_seeds, n_l1_seeds=n_l1_seeds,
     )
     if ensemble_info["promoted"]:
         active_rho = float(ensemble_info["rho_ensemble"])
@@ -169,7 +172,7 @@ def freeze_v1_final(
                 calib_brier=markets_metrics[market]["calib_brier"],
             )
 
-    version = "v1.2" if ensemble_info["promoted"] else "v1.0"
+    version = "v1.3" if ensemble_info["promoted"] else "v1.0"
     manifest = {
         "version": version,
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -213,44 +216,81 @@ def _train_and_persist_dl_ensemble(
     train: pd.DataFrame, val_es: pd.DataFrame,
     val_calib: pd.DataFrame, val_gate: pd.DataFrame,
     xgb_model: Any, xgb_rho: float, out_dir: Path,
+    n_l3_seeds: int = 3, n_l1_seeds: int = 1,
 ) -> dict[str, Any]:
-    """Train L1 (MLP) + L3 (bivariate) DLs, grid-search 3-way weights on val_calib,
-    persist whichever configuration wins. Always evaluates on val_gate for the
-    final promotion decision against XGB-alone (Δ < -0.005).
+    """Train L1 + L3 ensemble (multi-seed averaging), grid-search 3-way weights
+    on val_calib, persist if val_gate Δ < -0.005 vs XGB-only.
+
+    Multi-seed averaging: trains N independent DLs with different seeds and
+    averages their lambda predictions. Reduces DL variance ~sqrt(N) and gives
+    consistent gains over single-seed in our empirical eval (see report).
 
     Saves:
-      dl/   — L1 MLP artefacts
-      l3/   — L3 bivariate artefacts (if used)
-      ensemble.json — {weight_xgb, weight_l1, weight_l3, rho_ensemble, ...}
+      dl_seeds/seed_K/   — L1 MLP per seed (if used)
+      l3_seeds/seed_K/   — L3 bivariate per seed (if used)
+      ensemble.json — {weight_xgb, weight_l1, weight_l3, rho_ensemble,
+                       l1_seeds, l3_seeds, ...}
     """
     h_goals_tr = train["home_score"].to_numpy()
     a_goals_tr = train["away_score"].to_numpy()
-
-    dl_cfg = DLConfig()
-    biv_cfg = BivariateConfig()
     team_idx = build_team_index(pd.concat([train, val_es, val_calib, val_gate],
                                            ignore_index=True))
 
-    # --- Train L1 MLP ---
-    l1_model, l1_stats, l1_info = train_dl_model(train, val_es, team_idx, dl_cfg)
-    log.info("L1 trained", best_val_es=l1_info["best_val_es"])
+    l1_seeds = [42, 1, 2, 3, 4][:n_l1_seeds]
+    l3_seeds = [42, 1, 2, 3, 4][:n_l3_seeds]
+    dl_cfg = DLConfig()
+    biv_cfg = BivariateConfig()
 
-    # --- Train L3 bivariate ---
-    l3_model, l3_stats, l3_info = train_bivariate_model(train, val_es, team_idx, biv_cfg)
-    log.info("L3 trained", best_val_es=l3_info["best_val_es"])
+    # --- Train L1 MLP (one or more seeds) ---
+    l1_models: list = []
+    l1_stats_list: list = []
+    l1_infos: list = []
+    for s in l1_seeds:
+        cfg = DLConfig(seed=s)
+        m, st, info = train_dl_model(train, val_es, team_idx, cfg)
+        l1_models.append(m)
+        l1_stats_list.append(st)
+        l1_infos.append(info)
+        log.info("L1 trained", seed=s, best_val_es=info["best_val_es"])
 
-    # --- Cache all lambdas (XGB, L1, L3) on train / val_calib / val_gate ---
+    # --- Train L3 bivariate (multi-seed) ---
+    l3_models: list = []
+    l3_stats_list: list = []
+    l3_infos: list = []
+    for s in l3_seeds:
+        cfg = BivariateConfig(seed=s)
+        m, st, info = train_bivariate_model(train, val_es, team_idx, cfg)
+        l3_models.append(m)
+        l3_stats_list.append(st)
+        l3_infos.append(info)
+        log.info("L3 trained", seed=s, best_val_es=info["best_val_es"])
+
+    # --- Cache lambdas (XGB single, L1/L3 averaged over seeds) ---
     lam_h_xgb_tr, lam_a_xgb_tr = xgb_model.predict_lambda(train)
     lam_h_xgb_c, lam_a_xgb_c = xgb_model.predict_lambda(val_calib)
     lam_h_xgb_g, lam_a_xgb_g = xgb_model.predict_lambda(val_gate)
 
-    lam_h_l1_tr, lam_a_l1_tr = dl_predict(l1_model, train, team_idx, l1_stats)
-    lam_h_l1_c, lam_a_l1_c = dl_predict(l1_model, val_calib, team_idx, l1_stats)
-    lam_h_l1_g, lam_a_l1_g = dl_predict(l1_model, val_gate, team_idx, l1_stats)
+    def _avg_l1(df):
+        lhs, las = [], []
+        for m, st in zip(l1_models, l1_stats_list, strict=True):
+            lh, la = dl_predict(m, df, team_idx, st)
+            lhs.append(lh); las.append(la)
+        return np.mean(lhs, axis=0), np.mean(las, axis=0)
 
-    lam_h_l3_tr, lam_a_l3_tr, _ = predict_lambda_rho(l3_model, train, team_idx, l3_stats)
-    lam_h_l3_c, lam_a_l3_c, _ = predict_lambda_rho(l3_model, val_calib, team_idx, l3_stats)
-    lam_h_l3_g, lam_a_l3_g, _ = predict_lambda_rho(l3_model, val_gate, team_idx, l3_stats)
+    def _avg_l3(df):
+        lhs, las = [], []
+        for m, st in zip(l3_models, l3_stats_list, strict=True):
+            lh, la, _ = predict_lambda_rho(m, df, team_idx, st)
+            lhs.append(lh); las.append(la)
+        return np.mean(lhs, axis=0), np.mean(las, axis=0)
+
+    lam_h_l1_tr, lam_a_l1_tr = _avg_l1(train)
+    lam_h_l1_c, lam_a_l1_c = _avg_l1(val_calib)
+    lam_h_l1_g, lam_a_l1_g = _avg_l1(val_gate)
+
+    lam_h_l3_tr, lam_a_l3_tr = _avg_l3(train)
+    lam_h_l3_c, lam_a_l3_c = _avg_l3(val_calib)
+    lam_h_l3_g, lam_a_l3_g = _avg_l3(val_gate)
 
     # XGB-alone baseline on val_gate (for final promotion gate)
     xgb_gate_probs = _compute_1x2_probs(lam_h_xgb_g, lam_a_xgb_g, rho=xgb_rho)
@@ -302,25 +342,45 @@ def _train_and_persist_dl_ensemble(
     uses_l1 = w_l1 > eps
     uses_l3 = w_l3 > eps
 
+    # Clean previous artefacts (single-seed and multi-seed paths)
+    for d_name in ("dl", "l3"):
+        d = out_dir / d_name
+        if d.exists():
+            for f in d.iterdir():
+                f.unlink()
+            d.rmdir()
+    for d_name in ("dl_seeds", "l3_seeds"):
+        d = out_dir / d_name
+        if d.exists():
+            for sub in d.iterdir():
+                if sub.is_dir():
+                    for f in sub.iterdir():
+                        f.unlink()
+                    sub.rmdir()
+            d.rmdir()
+    if (out_dir / "ensemble.json").exists():
+        (out_dir / "ensemble.json").unlink()
+
     if promoted:
         if uses_l1:
-            save_dl_model(l1_model, team_idx, l1_stats, dl_cfg, out_dir / "dl")
+            for i, (m, st) in enumerate(zip(l1_models, l1_stats_list, strict=True)):
+                save_dl_model(
+                    m, team_idx, st, DLConfig(seed=l1_seeds[i]),
+                    out_dir / "dl_seeds" / f"seed_{l1_seeds[i]}",
+                )
         if uses_l3:
-            save_bivariate(l3_model, team_idx, l3_stats, biv_cfg, out_dir / "l3")
+            for i, (m, st) in enumerate(zip(l3_models, l3_stats_list, strict=True)):
+                save_bivariate(
+                    m, team_idx, st, BivariateConfig(seed=l3_seeds[i]),
+                    out_dir / "l3_seeds" / f"seed_{l3_seeds[i]}",
+                )
         (out_dir / "ensemble.json").write_text(json.dumps({
             "weight_xgb": w_xgb, "weight_l1": w_l1, "weight_l3": w_l3,
             "rho_ensemble": rho_ens,
             "selected_on": "val_calib_log_loss",
+            "l1_seeds": l1_seeds if uses_l1 else [],
+            "l3_seeds": l3_seeds if uses_l3 else [],
         }, indent=2))
-    else:
-        for p in [out_dir / "ensemble.json"]:
-            if p.exists():
-                p.unlink()
-        for d in [out_dir / "dl", out_dir / "l3"]:
-            if d.exists():
-                for f in d.iterdir():
-                    f.unlink()
-                d.rmdir()
 
     return {
         "promoted": promoted,
@@ -334,10 +394,10 @@ def _train_and_persist_dl_ensemble(
         "ensemble_brier": ens_br,
         "xgb_only_log_loss": xgb_only_ll,
         "delta_vs_xgb_only": float(delta),
-        "l1_best_val_es_nll": float(l1_info["best_val_es"]),
-        "l1_n_epochs_run": int(l1_info["n_epochs_run"]),
-        "l3_best_val_es_nll": float(l3_info["best_val_es"]),
-        "l3_n_epochs_run": int(l3_info["n_epochs_run"]),
+        "l1_seeds": l1_seeds,
+        "l3_seeds": l3_seeds,
+        "l1_best_val_es_nll": [float(i["best_val_es"]) for i in l1_infos],
+        "l3_best_val_es_nll": [float(i["best_val_es"]) for i in l3_infos],
         "l1_config": {
             "embed_dim": dl_cfg.embed_dim,
             "hidden_dims": list(dl_cfg.hidden_dims),

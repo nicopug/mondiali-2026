@@ -160,28 +160,46 @@ def predict_match(
     if ensemble_path.exists():
         ens_cfg = json.loads(ensemble_path.read_text())
         w_xgb = float(ens_cfg["weight_xgb"])
-        # Backward-compat: old freezes had "weight_dl" instead of weight_l1/weight_l3
         w_l1 = float(ens_cfg.get("weight_l1", ens_cfg.get("weight_dl", 0.0)))
         w_l3 = float(ens_cfg.get("weight_l3", 0.0))
         rho = float(ens_cfg["rho_ensemble"])
         lam_h = w_xgb * lam_h_xgb
         lam_a = w_xgb * lam_a_xgb
-        if w_l1 > 1e-3 and (model_dir / "dl").exists():
+
+        # L1: try multi-seed dir first, then single-seed legacy
+        if w_l1 > 1e-3:
             from mondiali.model.dl_poisson import (
                 load_dl_model, predict_lambda as l1_predict,
             )
-            m1, idx1, st1, _ = load_dl_model(model_dir / "dl")
-            lh1, la1 = l1_predict(m1, row, idx1, st1)
-            lam_h += w_l1 * float(lh1[0])
-            lam_a += w_l1 * float(la1[0])
-        if w_l3 > 1e-3 and (model_dir / "l3").exists():
+            seed_dirs = sorted((model_dir / "dl_seeds").glob("seed_*")) \
+                if (model_dir / "dl_seeds").exists() else []
+            if not seed_dirs and (model_dir / "dl").exists():
+                seed_dirs = [model_dir / "dl"]
+            if seed_dirs:
+                lhs, las = [], []
+                for sd in seed_dirs:
+                    m1, idx1, st1, _ = load_dl_model(sd)
+                    lh1, la1 = l1_predict(m1, row, idx1, st1)
+                    lhs.append(float(lh1[0])); las.append(float(la1[0]))
+                lam_h += w_l1 * float(np.mean(lhs))
+                lam_a += w_l1 * float(np.mean(las))
+
+        if w_l3 > 1e-3:
             from mondiali.model.dl_bivariate import (
                 load_bivariate, predict_lambda_rho,
             )
-            m3, idx3, st3, _ = load_bivariate(model_dir / "l3")
-            lh3, la3, _ = predict_lambda_rho(m3, row, idx3, st3)
-            lam_h += w_l3 * float(lh3[0])
-            lam_a += w_l3 * float(la3[0])
+            seed_dirs = sorted((model_dir / "l3_seeds").glob("seed_*")) \
+                if (model_dir / "l3_seeds").exists() else []
+            if not seed_dirs and (model_dir / "l3").exists():
+                seed_dirs = [model_dir / "l3"]
+            if seed_dirs:
+                lhs, las = [], []
+                for sd in seed_dirs:
+                    m3, idx3, st3, _ = load_bivariate(sd)
+                    lh3, la3, _ = predict_lambda_rho(m3, row, idx3, st3)
+                    lhs.append(float(lh3[0])); las.append(float(la3[0]))
+                lam_h += w_l3 * float(np.mean(lhs))
+                lam_a += w_l3 * float(np.mean(las))
         ensemble_used = True
     else:
         rho = float((model_dir / "rho.txt").read_text().strip())
@@ -304,25 +322,31 @@ class BatchPredictor:
             self.w_l1 = float(ens.get("weight_l1", ens.get("weight_dl", 0.0)))
             self.w_l3 = float(ens.get("weight_l3", 0.0))
             self.rho_active = float(ens["rho_ensemble"])
-            if self.w_l1 > 1e-3 and (self.model_dir / "dl").exists():
+            self.l1_models: list = []
+            if self.w_l1 > 1e-3:
                 from mondiali.model.dl_poisson import load_dl_model
-                self.l1_model, self.l1_idx, self.l1_stats, _ = load_dl_model(
-                    self.model_dir / "dl"
-                )
-            else:
-                self.l1_model = None
-            if self.w_l3 > 1e-3 and (self.model_dir / "l3").exists():
+                seed_dirs = sorted((self.model_dir / "dl_seeds").glob("seed_*")) \
+                    if (self.model_dir / "dl_seeds").exists() else []
+                if not seed_dirs and (self.model_dir / "dl").exists():
+                    seed_dirs = [self.model_dir / "dl"]
+                for sd in seed_dirs:
+                    m, idx, st, _ = load_dl_model(sd)
+                    self.l1_models.append((m, idx, st))
+            self.l3_models: list = []
+            if self.w_l3 > 1e-3:
                 from mondiali.model.dl_bivariate import load_bivariate
-                self.l3_model, self.l3_idx, self.l3_stats, _ = load_bivariate(
-                    self.model_dir / "l3"
-                )
-            else:
-                self.l3_model = None
+                seed_dirs = sorted((self.model_dir / "l3_seeds").glob("seed_*")) \
+                    if (self.model_dir / "l3_seeds").exists() else []
+                if not seed_dirs and (self.model_dir / "l3").exists():
+                    seed_dirs = [self.model_dir / "l3"]
+                for sd in seed_dirs:
+                    m, idx, st, _ = load_bivariate(sd)
+                    self.l3_models.append((m, idx, st))
         else:
             self.w_xgb, self.w_l1, self.w_l3 = 1.0, 0.0, 0.0
             self.rho_active = self.rho_xgb
-            self.l1_model = None
-            self.l3_model = None
+            self.l1_models = []
+            self.l3_models = []
 
     def predict_lambdas(
         self, matches_df: pd.DataFrame,
@@ -335,18 +359,22 @@ class BatchPredictor:
         lam_h_xgb, lam_a_xgb = self.xgb_model.predict_lambda(matches_df)
         lam_h = self.w_xgb * lam_h_xgb
         lam_a = self.w_xgb * lam_a_xgb
-        if self.l1_model is not None:
+        if self.l1_models:
             from mondiali.model.dl_poisson import predict_lambda as l1_predict
-            lh1, la1 = l1_predict(self.l1_model, matches_df, self.l1_idx, self.l1_stats)
-            lam_h = lam_h + self.w_l1 * lh1
-            lam_a = lam_a + self.w_l1 * la1
-        if self.l3_model is not None:
+            lhs, las = [], []
+            for m, idx, st in self.l1_models:
+                lh1, la1 = l1_predict(m, matches_df, idx, st)
+                lhs.append(lh1); las.append(la1)
+            lam_h = lam_h + self.w_l1 * np.mean(lhs, axis=0)
+            lam_a = lam_a + self.w_l1 * np.mean(las, axis=0)
+        if self.l3_models:
             from mondiali.model.dl_bivariate import predict_lambda_rho
-            lh3, la3, _ = predict_lambda_rho(
-                self.l3_model, matches_df, self.l3_idx, self.l3_stats,
-            )
-            lam_h = lam_h + self.w_l3 * lh3
-            lam_a = lam_a + self.w_l3 * la3
+            lhs, las = [], []
+            for m, idx, st in self.l3_models:
+                lh3, la3, _ = predict_lambda_rho(m, matches_df, idx, st)
+                lhs.append(lh3); las.append(la3)
+            lam_h = lam_h + self.w_l3 * np.mean(lhs, axis=0)
+            lam_a = lam_a + self.w_l3 * np.mean(las, axis=0)
         return lam_h, lam_a, self.rho_active
 
     def build_row(

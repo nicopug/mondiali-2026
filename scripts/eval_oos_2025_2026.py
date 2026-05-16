@@ -71,26 +71,42 @@ def main(model_dir: Path = Path("models/v1_final")) -> dict:
         lam_h_tr = w_xgb * xgb.predict_lambda(train)[0]
         lam_a_tr = w_xgb * xgb.predict_lambda(train)[1]
 
-        if w_l1 > 1e-3 and (model_dir / "dl").exists():
+        if w_l1 > 1e-3:
             from mondiali.model.dl_poisson import load_dl_model, predict_lambda as l1p
-            m1, idx1, st1, _ = load_dl_model(model_dir / "dl")
-            lh1, la1 = l1p(m1, oos, idx1, st1)
-            lam_h += w_l1 * lh1
-            lam_a += w_l1 * la1
-            lh1_tr, la1_tr = l1p(m1, train, idx1, st1)
-            lam_h_tr += w_l1 * lh1_tr
-            lam_a_tr += w_l1 * la1_tr
-            print(f"  +L1 ({w_l1:.2f})")
-        if w_l3 > 1e-3 and (model_dir / "l3").exists():
+            seed_dirs = sorted((model_dir / "dl_seeds").glob("seed_*")) \
+                if (model_dir / "dl_seeds").exists() else []
+            if not seed_dirs and (model_dir / "dl").exists():
+                seed_dirs = [model_dir / "dl"]
+            lhs, las, lhs_tr, las_tr = [], [], [], []
+            for sd in seed_dirs:
+                m1, idx1, st1, _ = load_dl_model(sd)
+                lh1, la1 = l1p(m1, oos, idx1, st1)
+                lh1_tr, la1_tr = l1p(m1, train, idx1, st1)
+                lhs.append(lh1); las.append(la1)
+                lhs_tr.append(lh1_tr); las_tr.append(la1_tr)
+            lam_h += w_l1 * np.mean(lhs, axis=0)
+            lam_a += w_l1 * np.mean(las, axis=0)
+            lam_h_tr += w_l1 * np.mean(lhs_tr, axis=0)
+            lam_a_tr += w_l1 * np.mean(las_tr, axis=0)
+            print(f"  +L1 ({w_l1:.2f}, {len(seed_dirs)} seeds)")
+        if w_l3 > 1e-3:
             from mondiali.model.dl_bivariate import load_bivariate, predict_lambda_rho
-            m3, idx3, st3, _ = load_bivariate(model_dir / "l3")
-            lh3, la3, _ = predict_lambda_rho(m3, oos, idx3, st3)
-            lam_h += w_l3 * lh3
-            lam_a += w_l3 * la3
-            lh3_tr, la3_tr, _ = predict_lambda_rho(m3, train, idx3, st3)
-            lam_h_tr += w_l3 * lh3_tr
-            lam_a_tr += w_l3 * la3_tr
-            print(f"  +L3 ({w_l3:.2f})")
+            seed_dirs = sorted((model_dir / "l3_seeds").glob("seed_*")) \
+                if (model_dir / "l3_seeds").exists() else []
+            if not seed_dirs and (model_dir / "l3").exists():
+                seed_dirs = [model_dir / "l3"]
+            lhs, las, lhs_tr, las_tr = [], [], [], []
+            for sd in seed_dirs:
+                m3, idx3, st3, _ = load_bivariate(sd)
+                lh3, la3, _ = predict_lambda_rho(m3, oos, idx3, st3)
+                lh3_tr, la3_tr, _ = predict_lambda_rho(m3, train, idx3, st3)
+                lhs.append(lh3); las.append(la3)
+                lhs_tr.append(lh3_tr); las_tr.append(la3_tr)
+            lam_h += w_l3 * np.mean(lhs, axis=0)
+            lam_a += w_l3 * np.mean(las, axis=0)
+            lam_h_tr += w_l3 * np.mean(lhs_tr, axis=0)
+            lam_a_tr += w_l3 * np.mean(las_tr, axis=0)
+            print(f"  +L3 ({w_l3:.2f}, {len(seed_dirs)} seeds)")
 
         rho_ens = estimate_rho_mle(lam_h_tr, lam_a_tr, h_goals_tr, a_goals_tr)
         probs = _compute_1x2(lam_h, lam_a, rho=rho_ens)
