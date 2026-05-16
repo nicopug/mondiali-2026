@@ -24,10 +24,12 @@ from mondiali.data.scope import compute_tier3_scope
 from mondiali.data.tm_discover import discover_all_team_ids, rewrite_nations_file
 from mondiali.data.tm_rosters import TOURNAMENT_META, scrape_rosters_all
 from mondiali.data.transfermarkt import build_from_cache, scrape_all
+from mondiali.inference.predict import predict_match
 from mondiali.inference.state import save_state
 from mondiali.model.elo_logistic import EloLogisticBaseline
 from mondiali.training.baseline_prior import PriorBaseline
 from mondiali.training.evaluate import log_loss_1x2
+from mondiali.training.freeze import freeze_v1_final
 from mondiali.training.train import (
     train_tier1_pipeline,
     train_tier2_pipeline,
@@ -487,6 +489,65 @@ def train_tier4(
         typer.echo(">>> GATE FAILED - Tier 4 NOT promoted (delta >= 0.003)")
     else:
         typer.echo(">>> NO DECISION - |delta| < 0.003. Review Brier + report manually.")
+
+
+@app.command()
+def predict(
+    home: str,
+    away: str,
+    date: str,
+    neutral: bool = typer.Option(False, "--neutral"),
+    competition_importance: float = typer.Option(30.0, "--competition-importance"),
+    model_dir: str = typer.Option("", "--model-dir"),
+) -> None:
+    """Predict 1X2 + U/O 1.5/2.5/3.5 + BTTS for a single match (JSON output)."""
+    model_path = Path(model_dir) if model_dir else CONFIG.models_dir / "v1_final"
+    if not (model_path / "xgb_poisson.json").exists():
+        typer.echo(f"Model not found at {model_path} - run `mondiali freeze-v1` first", err=True)
+        raise typer.Exit(1)
+    state_dir = CONFIG.project_root / "data" / "state"
+    if not (state_dir / "elo_state.parquet").exists():
+        typer.echo("State missing - run `mondiali update-state` first", err=True)
+        raise typer.Exit(1)
+    snapshots_path = CONFIG.data_raw / "transfermarkt" / "snapshots.parquet"
+    out = predict_match(
+        home=home, away=away, date=pd.Timestamp(date), neutral=neutral,
+        state_dir=state_dir, model_dir=model_path,
+        tm_snapshots_path=snapshots_path,
+        competition_importance=competition_importance,
+    )
+    typer.echo(json.dumps(out, indent=2))
+
+
+@app.command(name="freeze-v1")
+def freeze_v1(
+    train_end: str = typer.Option("2023-12-31", "--train-end"),
+    val_gate_start: str = typer.Option("2024-01-01", "--val-gate-start"),
+    val_gate_end: str = typer.Option("2024-12-31", "--val-gate-end"),
+) -> None:
+    """Refit Tier 2 + write models/v1_final/ artefacts."""
+    matches_path = CONFIG.data_processed / "matches.parquet"
+    if not matches_path.exists():
+        typer.echo("matches.parquet missing - run `mondiali ingest` first", err=True)
+        raise typer.Exit(1)
+    out_dir = CONFIG.models_dir / "v1_final"
+    snapshots_path = CONFIG.data_raw / "transfermarkt" / "snapshots.parquet"
+    result = freeze_v1_final(
+        matches_path=matches_path,
+        out_dir=out_dir,
+        train_end=train_end,
+        val_gate_start=val_gate_start,
+        val_gate_end=val_gate_end,
+        snapshots_path=snapshots_path if snapshots_path.exists() else None,
+    )
+    typer.echo(f"Frozen v1_final to {out_dir}")
+    typer.echo(f"1X2 log-loss (calib): {result['train_result']['val_log_loss_calib']:.4f}")
+    for market, metrics in result["markets"].items():
+        verdict = "[OK]" if metrics["validated"] else "[FAIL]"
+        typer.echo(
+            f"  {market}: brier={metrics['brier']:.4f} "
+            f"vs baseline={metrics['baseline_brier']:.4f} {verdict}"
+        )
 
 
 @app.command(name="update-state")
