@@ -81,8 +81,22 @@ def freeze_v1_final(
     rho = float(result["rho"])
 
     model.save(out_dir / "xgb_poisson.json")
-    calibrator.save(out_dir / "calibrator.json")
     (out_dir / "rho.txt").write_text(f"{rho:.6f}\n")
+
+    calib_kept = float(result["brier_after"]) < float(result["brier_before"])
+    calibrator_path = out_dir / "calibrator.json"
+    if calib_kept:
+        calibrator.save(calibrator_path)
+        log.info("calibrator saved", brier_before=float(result["brier_before"]),
+                 brier_after=float(result["brier_after"]))
+    else:
+        if calibrator_path.exists():
+            calibrator_path.unlink()
+        log.warning(
+            "calibrator skipped (Brier did not improve)",
+            brier_before=float(result["brier_before"]),
+            brier_after=float(result["brier_after"]),
+        )
 
     df = pd.read_parquet(matches_path)
     df["date"] = pd.to_datetime(df["date"])
@@ -115,6 +129,7 @@ def freeze_v1_final(
         },
         "hparams": dict(model.params),
         "rho": rho,
+        "calibrator_kept": bool(calib_kept),
         "metrics_1x2": {
             "val_log_loss_raw": float(result["val_log_loss_raw"]),
             "val_log_loss_calib": float(result["val_log_loss_calib"]),

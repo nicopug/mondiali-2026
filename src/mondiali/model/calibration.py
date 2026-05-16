@@ -44,8 +44,16 @@ def _deserialize_iso(data: dict[str, Any]) -> IsotonicRegression:
     return iso
 
 
+MIN_PROB_FLOOR = 1e-3
+
+
 class IsotonicCalibrator1X2:
-    """Tre isotonic regressions indipendenti (1, X, 2) + rinormalizzazione."""
+    """Tre isotonic regressions indipendenti (1, X, 2) + rinormalizzazione.
+
+    A pre-normalization probability floor (``MIN_PROB_FLOOR``) is applied at
+    predict time to prevent isotonic from emitting exact zeros — which would
+    cause log-loss to explode when the true outcome falls on that class.
+    """
 
     def __init__(self) -> None:
         self.iso_home_: IsotonicRegression | None = None
@@ -81,11 +89,8 @@ class IsotonicCalibrator1X2:
         p_away = self.iso_away_.predict(probs[:, 2])
         out = np.column_stack([p_home, p_draw, p_away])
 
-        s = out.sum(axis=1, keepdims=True)
-        zero_mask = (s.flatten() == 0)
-        out[zero_mask] = probs[zero_mask]
-        s_safe = out.sum(axis=1, keepdims=True)
-        out = out / s_safe
+        out = np.clip(out, MIN_PROB_FLOOR, 1.0)
+        out = out / out.sum(axis=1, keepdims=True)
         return np.asarray(out)
 
     def save(self, path: Path) -> None:
