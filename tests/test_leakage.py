@@ -218,3 +218,57 @@ def test_tier4_strict_pre_match() -> None:
         "Tier 4 leaked: same-date injury was counted (must be strict <)"
     )
 
+
+
+def test_predict_match_strict_pre_form_cache(tmp_path) -> None:
+    """build_inference_row must filter form_cache strictly (match_date < target_date).
+
+    Setup: two form_cache states — one that INCLUDES a match on the target date,
+    one that excludes it. Inference must produce identical form-5 features
+    because the strict-pre filter removes the target-date row.
+    """
+    from mondiali.inference.predict import build_inference_row
+    from mondiali.inference.state import _build_elo_state, _build_form_cache
+
+    target_date = pd.Timestamp("2024-06-15")
+    history = pd.DataFrame([{
+        "date": pd.Timestamp("2024-05-01"),
+        "home_team": "France", "away_team": "Italy",
+        "home_score": 2, "away_score": 1,
+        "tournament": "Friendly", "neutral": False,
+        "competition_importance": 30.0,
+        "home_elo_before": 1800.0, "away_elo_before": 1790.0,
+    }])
+    leaked = pd.concat([history, pd.DataFrame([{
+        "date": target_date,
+        "home_team": "France", "away_team": "Italy",
+        "home_score": 5, "away_score": 0,  # would skew form if leaked
+        "tournament": "Friendly", "neutral": False,
+        "competition_importance": 30.0,
+        "home_elo_before": 1810.0, "away_elo_before": 1800.0,
+    }])], ignore_index=True)
+
+    elo_clean = _build_elo_state(history)
+    form_clean = _build_form_cache(history)
+    elo_leaked = _build_elo_state(leaked)
+    form_leaked = _build_form_cache(leaked)
+
+    row_clean = build_inference_row(
+        home="France", away="Italy", date=target_date, neutral=False,
+        elo_state=elo_clean, form_cache=form_clean, tm_snapshots=None,
+    )
+    row_leaked = build_inference_row(
+        home="France", away="Italy", date=target_date, neutral=False,
+        elo_state=elo_leaked, form_cache=form_leaked, tm_snapshots=None,
+    )
+    for col in ("home_form_5", "home_gd_5", "home_goals_scored_5",
+                "home_goals_conceded_5"):
+        a = row_clean[col].iloc[0]
+        b = row_leaked[col].iloc[0]
+        # Either both NaN or equal
+        if pd.isna(a) and pd.isna(b):
+            continue
+        assert a == b, (
+            f"Anti-leakage failed: {col} differs ({a} vs {b}) — "
+            f"target-date row leaked into form cache"
+        )
