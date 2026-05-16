@@ -156,17 +156,31 @@ def predict_match(
     lam_h_xgb, lam_a_xgb = float(lam_h_xgb[0]), float(lam_a_xgb[0])
 
     ensemble_path = model_dir / "ensemble.json"
-    dl_dir = model_dir / "dl"
-    if ensemble_path.exists() and dl_dir.exists():
-        from mondiali.model.dl_poisson import load_dl_model, predict_lambda as dl_predict
-        dl_model, team_idx, stats, _ = load_dl_model(dl_dir)
-        lam_h_dl, lam_a_dl = dl_predict(dl_model, row, team_idx, stats)
-        lam_h_dl, lam_a_dl = float(lam_h_dl[0]), float(lam_a_dl[0])
+    if ensemble_path.exists():
         ens_cfg = json.loads(ensemble_path.read_text())
-        w_xgb, w_dl = float(ens_cfg["weight_xgb"]), float(ens_cfg["weight_dl"])
+        w_xgb = float(ens_cfg["weight_xgb"])
+        # Backward-compat: old freezes had "weight_dl" instead of weight_l1/weight_l3
+        w_l1 = float(ens_cfg.get("weight_l1", ens_cfg.get("weight_dl", 0.0)))
+        w_l3 = float(ens_cfg.get("weight_l3", 0.0))
         rho = float(ens_cfg["rho_ensemble"])
-        lam_h = w_xgb * lam_h_xgb + w_dl * lam_h_dl
-        lam_a = w_xgb * lam_a_xgb + w_dl * lam_a_dl
+        lam_h = w_xgb * lam_h_xgb
+        lam_a = w_xgb * lam_a_xgb
+        if w_l1 > 1e-3 and (model_dir / "dl").exists():
+            from mondiali.model.dl_poisson import (
+                load_dl_model, predict_lambda as l1_predict,
+            )
+            m1, idx1, st1, _ = load_dl_model(model_dir / "dl")
+            lh1, la1 = l1_predict(m1, row, idx1, st1)
+            lam_h += w_l1 * float(lh1[0])
+            lam_a += w_l1 * float(la1[0])
+        if w_l3 > 1e-3 and (model_dir / "l3").exists():
+            from mondiali.model.dl_bivariate import (
+                load_bivariate, predict_lambda_rho,
+            )
+            m3, idx3, st3, _ = load_bivariate(model_dir / "l3")
+            lh3, la3, _ = predict_lambda_rho(m3, row, idx3, st3)
+            lam_h += w_l3 * float(lh3[0])
+            lam_a += w_l3 * float(la3[0])
         ensemble_used = True
     else:
         rho = float((model_dir / "rho.txt").read_text().strip())
