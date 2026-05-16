@@ -519,6 +519,59 @@ def predict(
     typer.echo(json.dumps(out, indent=2))
 
 
+@app.command(name="predict-batch")
+def predict_batch(
+    fixtures_csv: str,
+    output_csv: str = typer.Option("predictions.csv", "--output"),
+    model_dir: str = typer.Option("", "--model-dir"),
+) -> None:
+    """Batch predict from a fixtures CSV (columns: home, away, date, neutral?, competition_importance?).
+
+    Loads model + state once, then iterates over all fixtures. Output CSV
+    contains input columns + lambda_home/away + 5 markets per row.
+    """
+    fixtures = pd.read_csv(fixtures_csv)
+    required = {"home", "away", "date"}
+    if not required.issubset(set(fixtures.columns)):
+        typer.echo(f"fixtures CSV must have columns {required}", err=True)
+        raise typer.Exit(1)
+    fixtures["date"] = pd.to_datetime(fixtures["date"])
+    if "neutral" not in fixtures.columns:
+        fixtures["neutral"] = False
+    if "competition_importance" not in fixtures.columns:
+        fixtures["competition_importance"] = 30.0
+
+    model_path = Path(model_dir) if model_dir else CONFIG.models_dir / "v1_final"
+    state_dir = CONFIG.project_root / "data" / "state"
+    snapshots_path = CONFIG.data_raw / "transfermarkt" / "snapshots.parquet"
+    rows = []
+    for _, fx in fixtures.iterrows():
+        out = predict_match(
+            home=fx["home"], away=fx["away"], date=fx["date"],
+            neutral=bool(fx["neutral"]),
+            state_dir=state_dir, model_dir=model_path,
+            tm_snapshots_path=snapshots_path if snapshots_path.exists() else None,
+            competition_importance=float(fx["competition_importance"]),
+        )
+        rows.append({
+            "home": fx["home"], "away": fx["away"],
+            "date": fx["date"].strftime("%Y-%m-%d"),
+            "neutral": bool(fx["neutral"]),
+            "lambda_home": out["lambda"]["home"],
+            "lambda_away": out["lambda"]["away"],
+            "p_home": out["markets"]["1x2"]["home"],
+            "p_draw": out["markets"]["1x2"]["draw"],
+            "p_away": out["markets"]["1x2"]["away"],
+            "p_over_1_5": out["markets"]["over_under_1_5"]["over"],
+            "p_over_2_5": out["markets"]["over_under_2_5"]["over"],
+            "p_over_3_5": out["markets"]["over_under_3_5"]["over"],
+            "p_btts": out["markets"]["btts"]["yes"],
+        })
+    out_path = Path(output_csv)
+    pd.DataFrame(rows).to_csv(out_path, index=False)
+    typer.echo(f"Wrote {len(rows)} predictions to {out_path}")
+
+
 @app.command(name="freeze-v1")
 def freeze_v1(
     train_end: str = typer.Option("2023-12-31", "--train-end"),

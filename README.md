@@ -18,7 +18,7 @@ Tier 0 (Elo)  →  Tier 1 (XGBoost+DC)  →  Tier 2 (calib+form)  →  Tier 3 (T
 | 3 | Tier 2: isotonic calibration + form-5 | ✅ Promosso vs Tier 1 | [validation_step3.md](reports/validation_step3.md) |
 | 4 | Tier 3: Transfermarkt market value | ❌ Non promosso (log-loss regression) | [validation_step4.md](reports/validation_step4.md) |
 | 5 | Tier 4: top-5 injury impact | ⚠️ Non promosso (no training data) | [validation_step5.md](reports/validation_step5.md) |
-| 6 | Model freeze per WC2026 | ⏳ Pianificato | — |
+| 6 | Model freeze v1_final + multi-market inference | ✅ Frozen (tag `v1.0`) | [validation_step6.md](reports/validation_step6.md) |
 
 ## Invarianti non negoziabili
 
@@ -41,8 +41,7 @@ pip install -e ".[dev]"
 
 ```bash
 # Pipeline dati
-mondiali download                # International results raw
-mondiali build-processed         # matches.parquet con tutte le feature
+mondiali ingest                  # International results raw + matches.parquet con tutte le feature
 
 # Training
 mondiali train-elo               # Tier 0 baseline
@@ -51,11 +50,53 @@ mondiali train-tier2             # + isotonic calibration
 mondiali train-tier3             # + Transfermarkt market value (NB: gate failed)
 mondiali train-tier4             # + injury impact (NB: needs injuries.csv populated)
 
+# Freeze + inference (STEP 6)
+mondiali freeze-v1               # Refit Tier 2, save models/v1_final/ artefacts
+mondiali update-state            # Rebuild data/state/{elo_state,form_cache}.parquet
+mondiali predict France Italy 2026-06-15 --neutral
+mondiali predict-batch fixtures.csv --output predictions.csv
+
 # Data fetching
 mondiali tm-scrape               # Transfermarkt national-team snapshots
 mondiali tm-scrape-rosters       # Transfermarkt player-level rosters per tournament
 mondiali bootstrap-injuries      # Wikipedia withdrawals → injuries.csv
 ```
+
+## Daily workflow durante WC2026
+
+```bash
+# 1. Aggiorna i risultati (esegui dopo amichevoli + dopo ogni giornata mondiale)
+mondiali ingest
+
+# 2. Ricostruisci lo stato runtime (Elo + form cache)
+mondiali update-state
+
+# 3. Predici i match della prossima giornata (CSV con colonne: home,away,date,neutral?,competition_importance?)
+mondiali predict-batch fixtures_round_X.csv --output predictions_round_X.csv
+
+# Output JSON per match singolo (con tutti i 5 markets):
+mondiali predict Argentina Croatia 2026-07-10 --neutral
+```
+
+Freeze invariant: tra l'11 giugno 2026 (kickoff) e il 19 luglio 2026 (finale) zero modifiche a `models/v1_final/`, agli iperparametri, o alle 24 feature. Lo stato in `data/state/` può essere aggiornato per assorbire nuove partite.
+
+## Output example
+
+```json
+{
+  "match": {"home": "France", "away": "Italy", "date": "2026-06-15", "neutral": true},
+  "model_version": "v1.0",
+  "lambda": {"home": 1.567, "away": 0.951},
+  "markets": {
+    "1x2": {"home": 0.508, "draw": 0.272, "away": 0.220, "calibrated": false},
+    "over_under_2_5": {"over": 0.461, "under": 0.539, "calibrated": false, "validated": false},
+    "over_under_3_5": {"over": 0.246, "under": 0.754, "calibrated": false, "validated": true},
+    "btts": {"yes": 0.495, "no": 0.505, "calibrated": false, "validated": false}
+  }
+}
+```
+
+`calibrated` indica se è stato applicato un calibratore post-hoc (auto-skipped al freeze se non migliora Brier su val_gate). `validated` indica se il market ha battuto la baseline naive (`brier_model < brier_baseline - 0.005`) sul val_gate 2024.
 
 ## Struttura repo
 
@@ -72,7 +113,12 @@ docs/superpowers/
 ├── specs/                   # Design doc per STEP (anteriore al codice)
 └── plans/                   # Implementation plan task-by-task (TDD)
 
-reports/                     # Validation report per STEP (decision record)
+models/v1_final/             # Frozen model (xgb_poisson.json, rho.txt, manifest.json,
+                             # markets_validation.json, markets_calibrators/, calibrator.json se kept)
+data/state/                  # Runtime state per inference (elo_state, form_cache)
+
+reports/                     # Validation report per STEP + backtest report
+scripts/backtest_tournaments.py  # Walk-forward backtest WC2022+Euro2024
 tests/                       # pytest, anti-leakage + per-modulo
 ```
 
