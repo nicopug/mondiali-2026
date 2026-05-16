@@ -151,11 +151,28 @@ def predict_match(
         competition_importance=competition_importance,
     )
 
-    model = PoissonXGBModel().load(model_dir / "xgb_poisson.json")
-    lam_h, lam_a = model.predict_lambda(row)
-    lam_h, lam_a = float(lam_h[0]), float(lam_a[0])
+    xgb_model = PoissonXGBModel().load(model_dir / "xgb_poisson.json")
+    lam_h_xgb, lam_a_xgb = xgb_model.predict_lambda(row)
+    lam_h_xgb, lam_a_xgb = float(lam_h_xgb[0]), float(lam_a_xgb[0])
 
-    rho = float((model_dir / "rho.txt").read_text().strip())
+    ensemble_path = model_dir / "ensemble.json"
+    dl_dir = model_dir / "dl"
+    if ensemble_path.exists() and dl_dir.exists():
+        from mondiali.model.dl_poisson import load_dl_model, predict_lambda as dl_predict
+        dl_model, team_idx, stats, _ = load_dl_model(dl_dir)
+        lam_h_dl, lam_a_dl = dl_predict(dl_model, row, team_idx, stats)
+        lam_h_dl, lam_a_dl = float(lam_h_dl[0]), float(lam_a_dl[0])
+        ens_cfg = json.loads(ensemble_path.read_text())
+        w_xgb, w_dl = float(ens_cfg["weight_xgb"]), float(ens_cfg["weight_dl"])
+        rho = float(ens_cfg["rho_ensemble"])
+        lam_h = w_xgb * lam_h_xgb + w_dl * lam_h_dl
+        lam_a = w_xgb * lam_a_xgb + w_dl * lam_a_dl
+        ensemble_used = True
+    else:
+        rho = float((model_dir / "rho.txt").read_text().strip())
+        lam_h, lam_a = lam_h_xgb, lam_a_xgb
+        ensemble_used = False
+
     joint = joint_matrix(lam_h, lam_a)
     joint = dixon_coles_correct(joint, lam_h, lam_a, rho)
 
@@ -217,7 +234,8 @@ def predict_match(
         "match": {"home": home, "away": away, "date": str(pd.Timestamp(date).date()),
                   "neutral": neutral},
         "model_version": model_version,
-        "lambda": {"home": lam_h, "away": lam_a},
+        "ensemble": ensemble_used,
+        "lambda": {"home": float(lam_h), "away": float(lam_a)},
         "markets": {
             "1x2": {"home": p_home, "draw": p_draw, "away": p_away,
                     "calibrated": calibrated},

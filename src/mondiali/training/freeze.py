@@ -16,11 +16,21 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import structlog
 
+from mondiali.model.dixon_coles import estimate_rho_mle
+from mondiali.model.dl_poisson import (
+    DLConfig,
+    build_team_index,
+    predict_lambda as dl_predict,
+    save_dl_model,
+    train_dl_model,
+)
 from mondiali.model.poisson_xgb import SYMMETRIC_FEATURES
-from mondiali.training.train import train_tier2_pipeline
+from mondiali.training.evaluate import brier_score_1x2, log_loss_1x2
+from mondiali.training.train import _compute_1x2_probs, train_tier2_pipeline
 from mondiali.training.validate_markets import (
     SECONDARY_MARKETS,
     fit_market_calibrators,
@@ -106,6 +116,7 @@ def freeze_v1_final(
     df["date"] = pd.to_datetime(df["date"])
     df = df.dropna(subset=["days_rest_home", "days_rest_away"])
     train = df[(df["date"] >= train_start) & (df["date"] <= train_end)].reset_index(drop=True)
+    val_es = df[(df["date"] >= val_es_start) & (df["date"] <= val_es_end)].reset_index(drop=True)
     val_calib = df[
         (df["date"] >= val_calib_start) & (df["date"] <= val_calib_end)
     ].reset_index(drop=True)
@@ -113,6 +124,22 @@ def freeze_v1_final(
         (df["date"] >= val_gate_start) & (df["date"] <= val_gate_end)
     ].reset_index(drop=True)
 
+    ensemble_info = _train_and_persist_dl_ensemble(
+        train=train, val_es=val_es, val_calib=val_calib, val_gate=val_gate,
+        xgb_model=model, xgb_rho=rho, out_dir=out_dir,
+    )
+    if ensemble_info["promoted"]:
+        active_rho = float(ensemble_info["rho_ensemble"])
+        log.info("ensemble promoted", **{
+            k: ensemble_info[k] for k in
+            ("weight_xgb", "weight_dl", "delta_vs_xgb_only", "ensemble_log_loss")
+        })
+    else:
+        active_rho = rho
+        log.warning("ensemble not promoted - using XGB-only",
+                    delta=ensemble_info["delta_vs_xgb_only"])
+
+    # Markets validation uses the active configuration (ensemble if promoted)
     market_calibrators = fit_market_calibrators(
         model=model, val_calib=val_calib, rho=rho,
     )
@@ -136,11 +163,16 @@ def freeze_v1_final(
                 calib_brier=markets_metrics[market]["calib_brier"],
             )
 
+    version = "v1.1" if ensemble_info["promoted"] else "v1.0"
     manifest = {
-        "version": "v1.0",
+        "version": version,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "git_sha": _git_sha(),
-        "model": "PoissonXGBModel-symmetric-tier2",
+        "model": (
+            "PoissonXGBModel-symmetric-tier2 + Tier7-DL-ensemble"
+            if ensemble_info["promoted"]
+            else "PoissonXGBModel-symmetric-tier2"
+        ),
         "n_features": len(SYMMETRIC_FEATURES),
         "feature_names": SYMMETRIC_FEATURES,
         "train_split": {"start": train_start, "end": train_end},
@@ -152,8 +184,10 @@ def freeze_v1_final(
             "snapshots_parquet_sha": _file_sha(snapshots_path) if snapshots_path else "n/a",
         },
         "hparams": dict(model.params),
-        "rho": rho,
+        "rho_xgb": rho,
+        "rho_active": active_rho,
         "calibrator_kept": bool(calib_kept),
+        "ensemble": ensemble_info,
         "metrics_1x2": {
             "val_log_loss_raw": float(result["val_log_loss_raw"]),
             "val_log_loss_calib": float(result["val_log_loss_calib"]),
@@ -163,5 +197,114 @@ def freeze_v1_final(
         "random_state": 42,
     }
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
-    log.info("freeze_v1_final done", out_dir=str(out_dir))
-    return {"manifest": manifest, "markets": markets_metrics, "train_result": result}
+    log.info("freeze_v1_final done", out_dir=str(out_dir), version=version)
+    return {"manifest": manifest, "markets": markets_metrics,
+            "train_result": result, "ensemble": ensemble_info}
+
+
+def _train_and_persist_dl_ensemble(
+    *,
+    train: pd.DataFrame, val_es: pd.DataFrame,
+    val_calib: pd.DataFrame, val_gate: pd.DataFrame,
+    xgb_model: Any, xgb_rho: float, out_dir: Path,
+) -> dict[str, Any]:
+    """Train Tier 7 DL, search optimal ensemble weight on val_calib, persist if promoted.
+
+    Promotion gate: ensemble val_gate log-loss < XGB-alone log_loss - 0.005.
+    Saves: dl/{weights.pt, team_idx.json, config.json, feature_stats.json},
+           ensemble.json (weight_xgb, weight_dl, rho_ensemble).
+    """
+    dl_cfg = DLConfig()
+    team_idx = build_team_index(pd.concat([train, val_es, val_calib, val_gate],
+                                           ignore_index=True))
+    dl_model, stats, info = train_dl_model(train, val_es, team_idx, dl_cfg)
+    log.info("ensemble dl trained", best_val_es=info["best_val_es"],
+             n_epochs=info["n_epochs_run"])
+
+    lam_h_xgb_tr, lam_a_xgb_tr = xgb_model.predict_lambda(train)
+    lam_h_dl_tr, lam_a_dl_tr = dl_predict(dl_model, train, team_idx, stats)
+    lam_h_xgb_c, lam_a_xgb_c = xgb_model.predict_lambda(val_calib)
+    lam_h_dl_c, lam_a_dl_c = dl_predict(dl_model, val_calib, team_idx, stats)
+    lam_h_xgb_g, lam_a_xgb_g = xgb_model.predict_lambda(val_gate)
+    lam_h_dl_g, lam_a_dl_g = dl_predict(dl_model, val_gate, team_idx, stats)
+
+    # XGB-alone baseline on val_gate
+    xgb_gate_probs = _compute_1x2_probs(lam_h_xgb_g, lam_a_xgb_g, rho=xgb_rho)
+    xgb_only_ll = float(log_loss_1x2(val_gate, xgb_gate_probs))
+
+    # Weight search on val_calib (not val_gate — keep gate untouched for the final decision)
+    best_weight = 0.5
+    best_calib_ll = float("inf")
+    for w_dl in np.arange(0.2, 0.81, 0.05):
+        w_xgb = 1.0 - w_dl
+        lam_h_tr = w_xgb * lam_h_xgb_tr + w_dl * lam_h_dl_tr
+        lam_a_tr = w_xgb * lam_a_xgb_tr + w_dl * lam_a_dl_tr
+        rho_ens = estimate_rho_mle(
+            lam_h_tr, lam_a_tr,
+            train["home_score"].to_numpy(), train["away_score"].to_numpy(),
+        )
+        lam_h_c = w_xgb * lam_h_xgb_c + w_dl * lam_h_dl_c
+        lam_a_c = w_xgb * lam_a_xgb_c + w_dl * lam_a_dl_c
+        probs = _compute_1x2_probs(lam_h_c, lam_a_c, rho=rho_ens)
+        ll = float(log_loss_1x2(val_calib, probs))
+        if ll < best_calib_ll:
+            best_calib_ll = ll
+            best_weight = float(w_dl)
+
+    # Refit rho with chosen weight on training
+    w_dl = best_weight
+    w_xgb = 1.0 - w_dl
+    lam_h_tr = w_xgb * lam_h_xgb_tr + w_dl * lam_h_dl_tr
+    lam_a_tr = w_xgb * lam_a_xgb_tr + w_dl * lam_a_dl_tr
+    rho_ens = estimate_rho_mle(
+        lam_h_tr, lam_a_tr,
+        train["home_score"].to_numpy(), train["away_score"].to_numpy(),
+    )
+
+    # Final gate evaluation
+    lam_h_g = w_xgb * lam_h_xgb_g + w_dl * lam_h_dl_g
+    lam_a_g = w_xgb * lam_a_xgb_g + w_dl * lam_a_dl_g
+    ens_probs = _compute_1x2_probs(lam_h_g, lam_a_g, rho=rho_ens)
+    ens_ll = float(log_loss_1x2(val_gate, ens_probs))
+    ens_br = float(brier_score_1x2(val_gate, ens_probs))
+    delta = ens_ll - xgb_only_ll
+    promoted = delta < -0.005
+
+    if promoted:
+        save_dl_model(dl_model, team_idx, stats, dl_cfg, out_dir / "dl")
+        (out_dir / "ensemble.json").write_text(json.dumps({
+            "weight_xgb": w_xgb, "weight_dl": w_dl, "rho_ensemble": rho_ens,
+            "selected_on": "val_calib_log_loss",
+        }, indent=2))
+    else:
+        # Clean up if previous freeze had ensemble
+        for p in [out_dir / "ensemble.json"]:
+            if p.exists():
+                p.unlink()
+        dl_dir = out_dir / "dl"
+        if dl_dir.exists():
+            for f in dl_dir.iterdir():
+                f.unlink()
+            dl_dir.rmdir()
+
+    return {
+        "promoted": promoted,
+        "weight_xgb": float(w_xgb),
+        "weight_dl": float(w_dl),
+        "rho_ensemble": float(rho_ens),
+        "val_calib_log_loss": float(best_calib_ll),
+        "ensemble_log_loss": ens_ll,
+        "ensemble_brier": ens_br,
+        "xgb_only_log_loss": xgb_only_ll,
+        "delta_vs_xgb_only": float(delta),
+        "dl_best_val_es_nll": float(info["best_val_es"]),
+        "dl_n_epochs_run": int(info["n_epochs_run"]),
+        "dl_config": {
+            "embed_dim": dl_cfg.embed_dim,
+            "hidden_dims": list(dl_cfg.hidden_dims),
+            "dropout": dl_cfg.dropout,
+            "lr": dl_cfg.lr,
+            "batch_size": dl_cfg.batch_size,
+            "max_epochs": dl_cfg.max_epochs,
+        },
+    }
