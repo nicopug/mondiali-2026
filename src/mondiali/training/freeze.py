@@ -21,6 +21,9 @@ import pandas as pd
 import structlog
 
 from mondiali.model.dixon_coles import estimate_rho_mle
+from mondiali.model.calibration import (
+    IsotonicCalibrator1X2, PlattCalibrator1X2,
+)
 from mondiali.model.dl_bivariate import (
     BivariateConfig,
     predict_lambda_rho,
@@ -79,8 +82,8 @@ def freeze_v1_final(
     val_calib_start: str = "2023-01-01",
     val_calib_end: str = "2023-12-31",
     snapshots_path: Path | None = None,
-    n_l3_seeds: int = 3,
-    n_l1_seeds: int = 1,
+    n_l3_seeds: int = 5,
+    n_l1_seeds: int = 3,
 ) -> dict[str, Any]:
     """Refit Tier 2 with refreshed splits and write all freeze artefacts."""
     out_dir = Path(out_dir)
@@ -105,6 +108,7 @@ def freeze_v1_final(
     model.save(out_dir / "xgb_poisson.json")
     (out_dir / "rho.txt").write_text(f"{rho:.6f}\n")
 
+    # XGB-only calibrator gate (legacy, kept for backward compat)
     calib_kept = float(result["brier_after"]) < float(result["brier_before"])
     calibrator_path = out_dir / "calibrator.json"
     if calib_kept:
@@ -115,7 +119,7 @@ def freeze_v1_final(
         if calibrator_path.exists():
             calibrator_path.unlink()
         log.warning(
-            "calibrator skipped (Brier did not improve)",
+            "XGB-only calibrator skipped (Brier did not improve)",
             brier_before=float(result["brier_before"]),
             brier_after=float(result["brier_after"]),
         )
@@ -137,6 +141,12 @@ def freeze_v1_final(
         xgb_model=model, xgb_rho=rho, out_dir=out_dir,
         n_l3_seeds=n_l3_seeds, n_l1_seeds=n_l1_seeds,
     )
+    # Task P: try Platt calibrator fit on ENSEMBLE probs (val_calib) and
+    # ship if it improves val_gate Brier vs raw ensemble.
+    ensemble_calib_info = _try_ensemble_calibrator(
+        train=train, val_calib=val_calib, val_gate=val_gate,
+        xgb_model=model, ensemble_info=ensemble_info, out_dir=out_dir,
+    ) if ensemble_info["promoted"] else {"kept": False, "reason": "no ensemble"}
     if ensemble_info["promoted"]:
         active_rho = float(ensemble_info["rho_ensemble"])
         log.info("ensemble promoted", **{
@@ -172,7 +182,7 @@ def freeze_v1_final(
                 calib_brier=markets_metrics[market]["calib_brier"],
             )
 
-    version = "v1.3" if ensemble_info["promoted"] else "v1.0"
+    version = "v1.4" if ensemble_info["promoted"] else "v1.0"
     manifest = {
         "version": version,
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -197,6 +207,7 @@ def freeze_v1_final(
         "rho_active": active_rho,
         "calibrator_kept": bool(calib_kept),
         "ensemble": ensemble_info,
+        "ensemble_calibrator": ensemble_calib_info,
         "metrics_1x2": {
             "val_log_loss_raw": float(result["val_log_loss_raw"]),
             "val_log_loss_calib": float(result["val_log_loss_calib"]),
@@ -209,6 +220,62 @@ def freeze_v1_final(
     log.info("freeze_v1_final done", out_dir=str(out_dir), version=version)
     return {"manifest": manifest, "markets": markets_metrics,
             "train_result": result, "ensemble": ensemble_info}
+
+
+def _try_ensemble_calibrator(
+    *, train: pd.DataFrame, val_calib: pd.DataFrame, val_gate: pd.DataFrame,
+    xgb_model: Any, ensemble_info: dict[str, Any], out_dir: Path,
+) -> dict[str, Any]:
+    """Fit Platt + Isotonic on ensemble 1X2 probs (val_calib) and pick winner on val_gate.
+
+    Promote the ensemble-prob calibrator only if it beats RAW ensemble probs
+    on val_gate Brier by > 0.001.
+
+    Saves `ensemble_calibrator.json` + `ensemble_calibrator_class.txt` if kept.
+    """
+    from mondiali.inference.predict import BatchPredictor  # noqa: PLC0415
+    from mondiali.training.evaluate import brier_score_1x2, compute_outcomes  # noqa: PLC0415
+
+    state_dir = out_dir.parent.parent / "data" / "state"  # heuristic; uses default
+    snaps_path = out_dir.parent.parent / "data" / "raw" / "transfermarkt" / "snapshots.parquet"
+    try:
+        bp = BatchPredictor(out_dir, state_dir, snaps_path)
+    except Exception as exc:
+        return {"kept": False, "reason": f"BatchPredictor failed: {exc}"}
+
+    lh_c, la_c, rho = bp.predict_lambdas(val_calib)
+    lh_g, la_g, _ = bp.predict_lambdas(val_gate)
+    calib_probs = _compute_1x2_probs(lh_c, la_c, rho=rho)
+    gate_probs = _compute_1x2_probs(lh_g, la_g, rho=rho)
+    outcomes_c = compute_outcomes(val_calib)
+    raw_gate_brier = float(brier_score_1x2(val_gate, gate_probs))
+
+    best = {"kept": False, "raw_brier": raw_gate_brier}
+    for cls_name, cls in (("platt", PlattCalibrator1X2), ("isotonic", IsotonicCalibrator1X2)):
+        try:
+            cal = cls().fit(calib_probs, outcomes_c)
+            gate_calib = cal.predict(gate_probs)
+            br = float(brier_score_1x2(val_gate, gate_calib))
+            log.info("ensemble_calib_eval", cls=cls_name, gate_brier=br, raw_brier=raw_gate_brier)
+            if br < raw_gate_brier - 0.001:
+                if not best["kept"] or br < best["calib_brier"]:
+                    best = {
+                        "kept": True, "class": cls_name,
+                        "calib_brier": br, "raw_brier": raw_gate_brier,
+                        "calibrator": cal,
+                    }
+        except Exception as exc:
+            log.warning("ensemble_calib_fit_failed", cls=cls_name, exc=str(exc))
+
+    if best["kept"]:
+        best["calibrator"].save(out_dir / "ensemble_calibrator.json")
+        (out_dir / "ensemble_calibrator_class.txt").write_text(best["class"] + "\n")
+        return {
+            "kept": True, "class": best["class"],
+            "calib_brier": best["calib_brier"],
+            "raw_brier": best["raw_brier"],
+        }
+    return {"kept": False, "raw_brier": raw_gate_brier}
 
 
 def _train_and_persist_dl_ensemble(

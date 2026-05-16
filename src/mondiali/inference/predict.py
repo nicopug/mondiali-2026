@@ -210,8 +210,22 @@ def predict_match(
     joint = dixon_coles_correct(joint, lam_h, lam_a, rho)
 
     p_home_raw, p_draw_raw, p_away_raw = prob_1x2(joint)
+    # Ensemble calibrator (preferred): fit on ensemble probs at freeze time
+    ens_calib_path = model_dir / "ensemble_calibrator.json"
+    ens_calib_class = model_dir / "ensemble_calibrator_class.txt"
     calibrator_path = model_dir / "calibrator.json"
-    if calibrator_path.exists():
+    calibrated = False
+    if ens_calib_path.exists() and ens_calib_class.exists():
+        cls_name = ens_calib_class.read_text().strip()
+        if cls_name == "platt":
+            from mondiali.model.calibration import PlattCalibrator1X2
+            cal = PlattCalibrator1X2.load(ens_calib_path)
+        else:
+            cal = IsotonicCalibrator1X2.load(ens_calib_path)
+        probs_calib = cal.predict(np.array([[p_home_raw, p_draw_raw, p_away_raw]]))[0]
+        p_home, p_draw, p_away = float(probs_calib[0]), float(probs_calib[1]), float(probs_calib[2])
+        calibrated = True
+    elif calibrator_path.exists():
         calibrator = IsotonicCalibrator1X2.load(calibrator_path)
         probs_calib = calibrator.predict(
             np.array([[p_home_raw, p_draw_raw, p_away_raw]])
