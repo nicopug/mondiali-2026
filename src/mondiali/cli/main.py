@@ -24,6 +24,7 @@ from mondiali.data.scope import compute_tier3_scope
 from mondiali.data.tm_discover import discover_all_team_ids, rewrite_nations_file
 from mondiali.data.tm_rosters import TOURNAMENT_META, scrape_rosters_all
 from mondiali.data.transfermarkt import build_from_cache, scrape_all
+from mondiali.inference.state import save_state
 from mondiali.model.elo_logistic import EloLogisticBaseline
 from mondiali.training.baseline_prior import PriorBaseline
 from mondiali.training.evaluate import log_loss_1x2
@@ -486,6 +487,19 @@ def train_tier4(
         typer.echo(">>> GATE FAILED - Tier 4 NOT promoted (delta >= 0.003)")
     else:
         typer.echo(">>> NO DECISION - |delta| < 0.003. Review Brier + report manually.")
+
+
+@app.command(name="update-state")
+def update_state() -> None:
+    """Rebuild data/state/{elo_state,form_cache}.parquet from current matches.parquet."""
+    matches_path = CONFIG.data_processed / "matches.parquet"
+    if not matches_path.exists():
+        typer.echo("matches.parquet missing - run `mondiali ingest` first", err=True)
+        raise typer.Exit(1)
+    matches = pd.read_parquet(matches_path)
+    state_dir = CONFIG.project_root / "data" / "state"
+    save_state(matches, state_dir)
+    typer.echo(f"State updated in {state_dir} ({len(matches)} matches processed)")
 
 
 if __name__ == "__main__":
