@@ -44,25 +44,58 @@ def _make_cached_predictor(teams: list[str]):
     return predict_fn
 
 
+def _qualifiers_from_groups_sim(groups_csv: Path) -> list[str]:
+    """Derive 32 R32 qualifiers from group simulation: top 2 per group + best 8 thirds."""
+    groups_df = pd.read_csv(groups_csv)
+    # Re-aggregate per-team P(qualified), P(third) using avg_points proxy
+    # NOTE: this is a heuristic since we don't have per-team P(third) directly;
+    # use the same Monte Carlo we just ran but extend it. Pragmatically here we
+    # take top 2 highest avg_points per group as the qualifiers and then top 8
+    # by avg_points among the 3rd-placed of each group.
+    from mondiali.inference.monte_carlo import simulate_group
+    import json
+    cfg = json.loads(Path("data/wc2026/groups_template.json").read_text())
+    manifest = json.loads(Path("models/v1_final/manifest.json").read_text())
+    rho = float(manifest.get("rho_active", manifest.get("rho_xgb", -0.05)))
+
+    top_two: list[str] = []
+    thirds_with_pts: list[tuple[str, float]] = []
+    for group_letter, _teams in cfg["groups"].items():
+        group_matches = groups_df[groups_df["group"] == group_letter]
+        sim_input = [
+            {"team_a": r["team_a"], "team_b": r["team_b"],
+             "lam_a": r["lam_a"], "lam_b": r["lam_b"], "rho": rho}
+            for _, r in group_matches.iterrows()
+        ]
+        sim = simulate_group(sim_input, n_sims=10000, seed=42)
+        sim = sim.sort_values("avg_points", ascending=False).reset_index(drop=True)
+        top_two.append(sim.iloc[0]["team"])
+        top_two.append(sim.iloc[1]["team"])
+        thirds_with_pts.append((sim.iloc[2]["team"], float(sim.iloc[2]["avg_points"])))
+
+    # Top 8 best thirds
+    thirds_with_pts.sort(key=lambda x: -x[1])
+    best_thirds = [t for t, _ in thirds_with_pts[:8]]
+    return top_two + best_thirds
+
+
 def main(bracket_path: Path | None = None) -> None:
     if bracket_path is None:
-        # Default: use top 2 from each group + best 3rd from groups_template
-        # For 12 groups + 8 best 3rd = 32 → we approximate by top 32 nations by Elo
-        cfg = json.loads(Path("data/wc2026/groups_template.json").read_text())
-        all_teams: list[str] = []
-        for teams in cfg["groups"].values():
-            all_teams.extend(teams[:3])  # top 3 per group = 36 candidates
-        # Pick top 32 by Elo
+        groups_csv = Path("reports/wc2026_groups_predictions.csv")
+        if not groups_csv.exists():
+            print("ERROR: run scripts/predict_wc2026_groups.py first")
+            return
+        bracket_teams = _qualifiers_from_groups_sim(groups_csv)
+        print(f"Selected {len(bracket_teams)} qualifiers (24 top-2 per group + 8 best thirds)")
+        # Seed-style pairings: 1 vs 32, 2 vs 31, etc.
+        # Sort by Elo for a meaningful seed order
         elo = pd.read_parquet(
             CONFIG.project_root / "data" / "state" / "elo_state.parquet"
         )
         elo_dict = dict(zip(elo["nation"], elo["elo"]))
-        ranked = sorted(
-            (t for t in all_teams if t in elo_dict),
-            key=lambda t: -elo_dict[t],
+        bracket_teams = sorted(
+            bracket_teams, key=lambda t: -elo_dict.get(t, 1500.0)
         )
-        bracket_teams = ranked[:32]
-        # Pair them: seed-1 vs seed-32, seed-2 vs seed-31, etc. (standard tennis-style)
         n = len(bracket_teams)
         bracket = []
         for i in range(n // 2):
