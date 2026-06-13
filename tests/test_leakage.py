@@ -279,7 +279,10 @@ def test_predict_match_strict_pre_form_cache(tmp_path) -> None:
 def test_talent_features_are_nan_or_derived_from_pre_match_values():
     """Talent columns derive ONLY from tier3 market-value cols (already strict
     pre-match). Assert: where talent_gap is non-NaN, both source values exist."""
-    matches = pd.read_parquet("data/processed/matches.parquet")
+    matches = _load_processed()
+    if matches is None:
+        pytest.skip("data/processed/matches.parquet not found")
+
     out = add_talent_features(matches)
     non_nan = out["talent_gap_top11"].notna()
     assert (out.loc[non_nan, "home_market_value_top11"].notna()).all()
