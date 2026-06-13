@@ -13,11 +13,13 @@ sintomo #1 di leakage.
 """
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 import pytest
 
 from mondiali.config import CONFIG
 from mondiali.features.elo import EloSystem
+from mondiali.features.talent import add_talent_features
 from mondiali.features.tier3 import TIER3_COLUMNS, add_tier3_features
 from mondiali.features.tier4 import add_tier4_features
 
@@ -272,3 +274,19 @@ def test_predict_match_strict_pre_form_cache(tmp_path) -> None:
             f"Anti-leakage failed: {col} differs ({a} vs {b}) — "
             f"target-date row leaked into form cache"
         )
+
+
+def test_talent_features_are_nan_or_derived_from_pre_match_values():
+    """Talent columns derive ONLY from tier3 market-value cols (already strict
+    pre-match). Assert: where talent_gap is non-NaN, both source values exist."""
+    matches = pd.read_parquet("data/processed/matches.parquet")
+    out = add_talent_features(matches)
+    non_nan = out["talent_gap_top11"].notna()
+    assert (out.loc[non_nan, "home_market_value_top11"].notna()).all()
+    assert (out.loc[non_nan, "away_market_value_top11"].notna()).all()
+    # exact identity with the differential (no extra transformation/leakage)
+    recomputed = (
+        out.loc[non_nan, "home_market_value_top11"]
+        - out.loc[non_nan, "away_market_value_top11"]
+    )
+    assert np.allclose(out.loc[non_nan, "talent_gap_top11"], recomputed)
