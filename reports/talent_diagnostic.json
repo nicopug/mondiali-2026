@@ -1,0 +1,11 @@
+{
+  "n_oos": 1166,
+  "n_with_market_value": 157,
+  "coverage": 0.1346,
+  "pearson_r": 0.1436,
+  "pearson_p": 0.072761,
+  "spearman_r": 0.066,
+  "spearman_p": 0.411826,
+  "ols_slope": 7.781987651794188e-10,
+  "verdict": "no usable signal"
+}
