@@ -1,0 +1,118 @@
+{
+  "_README": "Tabellone ufficiale WC2026 in ordine a foglie. Compila team_a/team_b coi nomi REALI delle qualificate (come appaiono in data/state/elo_state.parquet). Slot: W-X=vincitrice girone X, RU-X=seconda, 3-XYZ=terza da uno dei gironi elencati. L'assegnazione delle 8 terze segue l'Annex C FIFA in base a quali terze passano.",
+  "knockout_date": "2026-07-01",
+  "bracket_r32": [
+    {
+      "match": 74,
+      "slot_a": "W-E",
+      "slot_b": "3-ABCDF",
+      "team_a": "",
+      "team_b": ""
+    },
+    {
+      "match": 77,
+      "slot_a": "W-I",
+      "slot_b": "3-CDFGH",
+      "team_a": "",
+      "team_b": ""
+    },
+    {
+      "match": 73,
+      "slot_a": "RU-A",
+      "slot_b": "RU-B",
+      "team_a": "",
+      "team_b": ""
+    },
+    {
+      "match": 75,
+      "slot_a": "W-F",
+      "slot_b": "RU-C",
+      "team_a": "",
+      "team_b": ""
+    },
+    {
+      "match": 83,
+      "slot_a": "RU-K",
+      "slot_b": "RU-L",
+      "team_a": "",
+      "team_b": ""
+    },
+    {
+      "match": 84,
+      "slot_a": "W-H",
+      "slot_b": "RU-J",
+      "team_a": "",
+      "team_b": ""
+    },
+    {
+      "match": 81,
+      "slot_a": "W-D",
+      "slot_b": "3-BEFIJ",
+      "team_a": "",
+      "team_b": ""
+    },
+    {
+      "match": 82,
+      "slot_a": "W-G",
+      "slot_b": "3-AEHIJ",
+      "team_a": "",
+      "team_b": ""
+    },
+    {
+      "match": 76,
+      "slot_a": "W-C",
+      "slot_b": "RU-F",
+      "team_a": "",
+      "team_b": ""
+    },
+    {
+      "match": 78,
+      "slot_a": "RU-E",
+      "slot_b": "RU-I",
+      "team_a": "",
+      "team_b": ""
+    },
+    {
+      "match": 79,
+      "slot_a": "W-A",
+      "slot_b": "3-CEFHI",
+      "team_a": "",
+      "team_b": ""
+    },
+    {
+      "match": 80,
+      "slot_a": "W-L",
+      "slot_b": "3-EHIJK",
+      "team_a": "",
+      "team_b": ""
+    },
+    {
+      "match": 86,
+      "slot_a": "W-J",
+      "slot_b": "RU-H",
+      "team_a": "",
+      "team_b": ""
+    },
+    {
+      "match": 88,
+      "slot_a": "RU-D",
+      "slot_b": "RU-G",
+      "team_a": "",
+      "team_b": ""
+    },
+    {
+      "match": 85,
+      "slot_a": "W-B",
+      "slot_b": "3-EFGIJ",
+      "team_a": "",
+      "team_b": ""
+    },
+    {
+      "match": 87,
+      "slot_a": "W-K",
+      "slot_b": "3-DEIJL",
+      "team_a": "",
+      "team_b": ""
+    }
+  ]
+}
