@@ -395,3 +395,19 @@ def test_include_talent_false_unchanged_width():
     df = _one_match_df()
     X, _ = build_symmetric_rows(df, include_talent=False)  # noqa: N806
     assert X.shape == (2, len(SYMMETRIC_FEATURES))
+
+
+# ---------------------------------------------------------------------------
+# Task 3 – thread include_talent through PoissonXGBModel
+# ---------------------------------------------------------------------------
+
+def test_model_include_talent_trains_and_predicts():
+    df = _one_match_df()
+    train = pd.concat([df] * 40, ignore_index=True)
+    model = PoissonXGBModel(
+        params={"n_estimators": 10}, include_talent=True,
+    )
+    model.fit(train)
+    lam_h, lam_a = model.predict_lambda(df)
+    assert lam_h.shape == (1,) and lam_a.shape == (1,)
+    assert np.isfinite(lam_h[0]) and np.isfinite(lam_a[0])

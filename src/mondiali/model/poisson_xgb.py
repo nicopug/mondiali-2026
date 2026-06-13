@@ -215,9 +215,11 @@ class PoissonXGBModel:
         params: dict[str, Any] | None = None,
         *,
         include_tier4: bool = False,
+        include_talent: bool = False,
     ) -> None:
         self.params: dict[str, Any] = {**DEFAULT_PARAMS, **(params or {})}
         self.include_tier4 = include_tier4
+        self.include_talent = include_talent
         self.booster_: xgb.XGBRegressor | None = None
 
     def fit(
@@ -234,11 +236,15 @@ class PoissonXGBModel:
         time-decay weighting where recent matches matter more. If a per-match
         weight is desired, pass each weight twice (symmetric expansion).
         """
-        X, y = build_symmetric_rows(matches, include_tier4=self.include_tier4)  # noqa: N806
+        X, y = build_symmetric_rows(  # noqa: N806
+            matches, include_tier4=self.include_tier4,
+            include_talent=self.include_talent,
+        )
         fit_kwargs: dict[str, Any] = {}
         if early_stopping_val is not None:
             X_val, y_val = build_symmetric_rows(  # noqa: N806
-                early_stopping_val, include_tier4=self.include_tier4
+                early_stopping_val, include_tier4=self.include_tier4,
+                include_talent=self.include_talent,
             )
             fit_kwargs["eval_set"] = [(X_val, y_val)]
             fit_kwargs["verbose"] = False
@@ -261,7 +267,10 @@ class PoissonXGBModel:
         """Ritorna (lambda_home, lambda_away) per ogni match (shape (n,), (n,))."""
         if self.booster_ is None:
             raise RuntimeError("PoissonXGBModel must be fit() before predict_lambda")
-        X, _ = build_symmetric_rows(matches, include_tier4=self.include_tier4)  # noqa: N806
+        X, _ = build_symmetric_rows(  # noqa: N806
+            matches, include_tier4=self.include_tier4,
+            include_talent=self.include_talent,
+        )
         preds = self.booster_.predict(X)
         lam_h = preds[0::2]
         lam_a = preds[1::2]
