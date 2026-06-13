@@ -316,7 +316,7 @@ def test_build_symmetric_rows_handles_nan_tier3() -> None:
         "home_market_value_top11": [np.nan], "away_market_value_top11": [np.nan],
         "home_tm_age_days": [np.nan], "away_tm_age_days": [np.nan],
     })
-    X, y = build_symmetric_rows(matches)
+    X, y = build_symmetric_rows(matches)  # noqa: N806
     assert X.shape == (2, 24)
     assert np.isnan(X[0, 18])
     assert np.isnan(X[1, 18])
@@ -340,7 +340,7 @@ def test_build_symmetric_rows_tier3_symmetry() -> None:
         "home_market_value_top11": [400_000_000.0], "away_market_value_top11": [700_000_000.0],
         "home_tm_age_days": [30.0], "away_tm_age_days": [60.0],
     })
-    X, _ = build_symmetric_rows(matches)
+    X, _ = build_symmetric_rows(matches)  # noqa: N806
     # Home perspective (row 0): team=home, opp=away
     assert X[0, 18] == 500_000_000.0  # team_market_value_total = home
     assert X[0, 19] == 800_000_000.0  # opponent_market_value_total = away
@@ -351,3 +351,47 @@ def test_build_symmetric_rows_tier3_symmetry() -> None:
     assert X[1, 19] == 500_000_000.0
     assert X[1, 22] == 60.0
     assert X[1, 23] == 30.0
+
+
+# ---------------------------------------------------------------------------
+# Task 2 – include_talent flag
+# ---------------------------------------------------------------------------
+
+from mondiali.model.poisson_xgb import SYMMETRIC_FEATURES_TALENT_EXTRA  # noqa: E402
+
+
+def _one_match_df():
+    return pd.DataFrame({
+        "home_elo_before": [1600.0], "away_elo_before": [1500.0],
+        "neutral": [True], "competition_importance": [75.0],
+        "days_rest_home": [5.0], "days_rest_away": [6.0],
+        "home_score": [2], "away_score": [1],
+        "home_form_5": [0.6], "away_form_5": [0.4],
+        "home_gd_5": [1.0], "away_gd_5": [-1.0],
+        "home_goals_scored_5": [1.5], "away_goals_scored_5": [1.0],
+        "home_goals_conceded_5": [0.5], "away_goals_conceded_5": [1.2],
+        "home_avg_opp_elo_5": [1500.0], "away_avg_opp_elo_5": [1490.0],
+        "home_market_value_total": [800.0], "away_market_value_total": [300.0],
+        "home_market_value_top11": [500.0], "away_market_value_top11": [200.0],
+        "home_tm_age_days": [100.0], "away_tm_age_days": [120.0],
+        "talent_gap_top11": [300.0], "talent_log_ratio": [0.9],
+    })
+
+
+def test_include_talent_adds_two_features_with_sign_flip():
+    df = _one_match_df()
+    X, _ = build_symmetric_rows(df, include_talent=True)  # noqa: N806
+    assert SYMMETRIC_FEATURES_TALENT_EXTRA == ["talent_gap", "talent_log_ratio"]
+    assert X.shape == (2, len(SYMMETRIC_FEATURES) + 2)
+    gap_col = len(SYMMETRIC_FEATURES)
+    ratio_col = gap_col + 1
+    assert np.isclose(X[0, gap_col], 300.0)
+    assert np.isclose(X[1, gap_col], -300.0)
+    assert np.isclose(X[0, ratio_col], 0.9)
+    assert np.isclose(X[1, ratio_col], -0.9)
+
+
+def test_include_talent_false_unchanged_width():
+    df = _one_match_df()
+    X, _ = build_symmetric_rows(df, include_talent=False)  # noqa: N806
+    assert X.shape == (2, len(SYMMETRIC_FEATURES))

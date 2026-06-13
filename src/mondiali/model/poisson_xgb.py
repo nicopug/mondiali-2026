@@ -54,6 +54,8 @@ SYMMETRIC_FEATURES_TIER4_EXTRA: list[str] = [
     "opponent_value_absent_ratio",
 ]
 
+SYMMETRIC_FEATURES_TALENT_EXTRA: list[str] = ["talent_gap", "talent_log_ratio"]
+
 DEFAULT_PARAMS: dict[str, Any] = {
     "objective": "count:poisson",
     "tree_method": "hist",
@@ -71,7 +73,8 @@ DEFAULT_PARAMS: dict[str, Any] = {
 
 
 def build_symmetric_rows(  # noqa: PLR0915
-    matches: pd.DataFrame, *, include_tier4: bool = False
+    matches: pd.DataFrame, *, include_tier4: bool = False,
+    include_talent: bool = False,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Ritorna (X, y) dove per ogni match crea 2 righe consecutive.
 
@@ -82,8 +85,10 @@ def build_symmetric_rows(  # noqa: PLR0915
     le gestisce nativamente.
     """
     n = len(matches)
-    n_features = len(SYMMETRIC_FEATURES) + (
-        len(SYMMETRIC_FEATURES_TIER4_EXTRA) if include_tier4 else 0
+    n_features = (
+        len(SYMMETRIC_FEATURES)
+        + (len(SYMMETRIC_FEATURES_TIER4_EXTRA) if include_tier4 else 0)
+        + (len(SYMMETRIC_FEATURES_TALENT_EXTRA) if include_talent else 0)
     )
     X = np.empty((2 * n, n_features), dtype=float)  # noqa: N806
     y = np.empty(2 * n, dtype=float)
@@ -182,6 +187,17 @@ def build_symmetric_rows(  # noqa: PLR0915
         X[1::2, 25] = home_t5cnt
         X[1::2, 26] = away_t5val
         X[1::2, 27] = home_t5val
+
+    if include_talent:
+        base = len(SYMMETRIC_FEATURES) + (
+            len(SYMMETRIC_FEATURES_TIER4_EXTRA) if include_tier4 else 0
+        )
+        gap = matches["talent_gap_top11"].to_numpy(dtype=float)
+        log_ratio = matches["talent_log_ratio"].to_numpy(dtype=float)
+        X[0::2, base] = gap          # home perspective: + gap
+        X[1::2, base] = -gap         # away perspective: sign-flipped
+        X[0::2, base + 1] = log_ratio
+        X[1::2, base + 1] = -log_ratio
 
     return X, y
 
