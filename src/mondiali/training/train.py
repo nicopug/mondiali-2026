@@ -19,6 +19,7 @@ import optuna
 import pandas as pd
 import structlog
 
+from mondiali.features.talent import add_talent_features
 from mondiali.features.tier3 import TIER3_COLUMNS
 from mondiali.features.tier4 import TIER4_COLUMNS, add_tier4_features
 from mondiali.model.calibration import IsotonicCalibrator1X2
@@ -203,6 +204,73 @@ def train_tier2_pipeline(
         "val_log_loss_calib": val_log_loss_calib,
         "brier_before": brier_before,
         "brier_after": brier_after,
+        "n_train": len(train),
+        "n_val_es": len(val_es),
+        "n_val_calib": len(val_calib),
+        "n_val_gate": len(val_gate),
+    }
+
+
+def train_talent_challenger(
+    parquet_path: Path,
+    *,
+    train_start: str = "2002-01-01",
+    train_end: str = "2023-12-31",
+    val_es_start: str = "2022-07-01",
+    val_es_end: str = "2022-12-31",
+    val_calib_start: str = "2023-01-01",
+    val_calib_end: str = "2023-12-31",
+    val_gate_start: str = "2024-01-01",
+    val_gate_end: str = "2024-12-31",
+    early_stopping_rounds: int = 50,
+    model_params: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Challenger: Tier 2 stack + talent differential features (include_talent).
+
+    Same architecture and splits as the freeze; the only difference vs v1_final
+    is the 2 extra talent features. Returns the same dict shape as
+    train_tier2_pipeline.
+    """
+    df = pd.read_parquet(parquet_path)
+    df["date"] = pd.to_datetime(df["date"])
+    df = df.dropna(subset=["days_rest_home", "days_rest_away"]).copy()
+    df = add_talent_features(df)
+
+    train = df[(df["date"] >= train_start) & (df["date"] <= train_end)].reset_index(drop=True)
+    val_es = df[(df["date"] >= val_es_start) & (df["date"] <= val_es_end)].reset_index(drop=True)
+    val_calib = df[
+        (df["date"] >= val_calib_start) & (df["date"] <= val_calib_end)
+    ].reset_index(drop=True)
+    val_gate = df[
+        (df["date"] >= val_gate_start) & (df["date"] <= val_gate_end)
+    ].reset_index(drop=True)
+
+    model = PoissonXGBModel(params=model_params, include_talent=True)
+    model.fit(train, early_stopping_val=val_es, early_stopping_rounds=early_stopping_rounds)
+
+    lam_h_tr, lam_a_tr = model.predict_lambda(train)
+    rho = estimate_rho_mle(
+        lam_h_tr, lam_a_tr,
+        train["home_score"].to_numpy(), train["away_score"].to_numpy(),
+    )
+
+    lam_h_cal, lam_a_cal = model.predict_lambda(val_calib)
+    raw_probs_calib = _compute_1x2_probs(lam_h_cal, lam_a_cal, rho=rho)
+    outcomes_calib = compute_outcomes(val_calib)
+    calibrator = IsotonicCalibrator1X2().fit(raw_probs_calib, outcomes_calib)
+
+    lam_h_ga, lam_a_ga = model.predict_lambda(val_gate)
+    raw_probs_gate = _compute_1x2_probs(lam_h_ga, lam_a_ga, rho=rho)
+    cal_probs_gate = calibrator.predict(raw_probs_gate)
+
+    return {
+        "model": model,
+        "rho": rho,
+        "calibrator": calibrator,
+        "val_log_loss_raw": log_loss_1x2(val_gate, raw_probs_gate),
+        "val_log_loss_calib": log_loss_1x2(val_gate, cal_probs_gate),
+        "brier_before": brier_score_1x2(val_gate, raw_probs_gate),
+        "brier_after": brier_score_1x2(val_gate, cal_probs_gate),
         "n_train": len(train),
         "n_val_es": len(val_es),
         "n_val_calib": len(val_calib),
