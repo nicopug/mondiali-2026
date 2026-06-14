@@ -3,7 +3,6 @@
 **Generato:** 2026-06-14  
 **Predizioni:** `reports/wc2026_groups_predictions.csv` (congelate 2026-05-16)  
 **Risultati:** `data/raw/results.csv` (martj42)  
-**Supplemento manuale:** `data/wc2026/manual_results.csv` (4 partite non ancora su martj42)  
 **Partite valutate:** 8
 
 > Leak-free: si valutano solo le probabilita' ex-ante, mai ri-predette.
