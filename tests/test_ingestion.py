@@ -7,6 +7,7 @@ import pytest
 
 from mondiali.data.ingestion import (
     INTERNATIONAL_RESULTS_URL,
+    append_manual_results,
     build_processed_matches,
     download_international_results,
     load_international_results,
@@ -174,6 +175,64 @@ def test_build_processed_matches_includes_tier1_features(tmp_path: Path) -> None
     assert df.iloc[1]["competition_importance"] == 1
     # days_rest_home per Francia nella seconda riga = 53 giorni
     assert df.iloc[1]["days_rest_home"] == 53.0
+
+
+def test_append_manual_results_injects_unpublished_match(tmp_path: Path) -> None:
+    """I risultati manuali entrano nel grezzo prima del feature engineering."""
+    base = load_international_results(_write_raw(tmp_path))
+    manual = tmp_path / "manual.csv"
+    manual.write_text(
+        "date,home_team,away_team,home_score,away_score,neutral\n"
+        "2026-06-13,Australia,Turkey,2,0,True\n"
+    )
+    out = append_manual_results(base, manual)
+    assert len(out) == len(base) + 1
+    row = out[(out["home_team"] == "Australia") & (out["away_team"] == "Turkey")].iloc[0]
+    assert int(row["home_score"]) == 2
+    assert int(row["away_score"]) == 0
+    # tournament default -> WC, cosi' Elo applica il k-factor corretto
+    assert row["tournament"] == "FIFA World Cup"
+    assert bool(row["neutral"]) is True
+
+
+def test_append_manual_results_primary_wins_on_conflict(tmp_path: Path) -> None:
+    """Quando martj42 pubblica la stessa partita (anche con orientamento
+    invertito), la riga manuale viene scartata."""
+    base = load_international_results(_write_raw(
+        tmp_path,
+        extra="2026-06-13,Turkey,Australia,0,2,FIFA World Cup,,,TRUE\n",
+    ))
+    manual = tmp_path / "manual.csv"
+    manual.write_text(
+        "date,home_team,away_team,home_score,away_score,neutral\n"
+        "2026-06-13,Australia,Turkey,9,9,True\n"  # valore errato che NON deve vincere
+    )
+    out = append_manual_results(base, manual)
+    # stessa partita (coppia non orientata + data): nessuna riga aggiunta
+    assert len(out) == len(base)
+    aus_tur = out[
+        ((out["home_team"] == "Turkey") & (out["away_team"] == "Australia"))
+        | ((out["home_team"] == "Australia") & (out["away_team"] == "Turkey"))
+    ]
+    assert len(aus_tur) == 1
+    assert {int(aus_tur.iloc[0]["home_score"]), int(aus_tur.iloc[0]["away_score"])} == {0, 2}
+
+
+def test_append_manual_results_missing_file_is_noop(tmp_path: Path) -> None:
+    base = load_international_results(_write_raw(tmp_path))
+    out = append_manual_results(base, tmp_path / "does_not_exist.csv")
+    assert len(out) == len(base)
+
+
+def _write_raw(tmp_path: Path, extra: str = "") -> Path:
+    raw_csv = tmp_path / "results.csv"
+    raw_csv.write_text(
+        "date,home_team,away_team,home_score,away_score,tournament,city,country,neutral\n"
+        "2018-07-15,France,Croatia,4,2,FIFA World Cup,Moscow,Russia,TRUE\n"
+        "2018-09-06,France,Germany,0,0,UEFA Nations League,Munich,Germany,FALSE\n"
+        + extra
+    )
+    return raw_csv
 
 
 def test_build_processed_matches_without_tier3_snapshots(

@@ -51,7 +51,8 @@ def ingest(
     raw_csv = CONFIG.data_raw / "results.csv"
     download_international_results(raw_csv, force=force)
     processed_path = CONFIG.data_processed / "matches.parquet"
-    build_processed_matches(raw_csv, processed_path)
+    manual_csv = CONFIG.project_root / "data" / "wc2026" / "manual_results.csv"
+    build_processed_matches(raw_csv, processed_path, manual_csv=manual_csv)
     typer.echo(f"OK - processed matches written to {processed_path}")
 
 

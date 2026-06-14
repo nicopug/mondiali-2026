@@ -71,7 +71,70 @@ def load_international_results(csv_path: Path) -> pd.DataFrame:
     return df
 
 
-def build_processed_matches(raw_csv: Path, out_path: Path) -> Path:
+def append_manual_results(df: pd.DataFrame, manual_csv: Path) -> pd.DataFrame:
+    """Inietta nel grezzo i risultati inseriti a mano prima del feature engineering.
+
+    Serve per le partite gia' giocate ma non ancora pubblicate dal dataset
+    community (martj42), che tipicamente ritarda 1-2 giorni sui risultati di
+    giornata. Iniettandole qui entrano in ``matches.parquet`` -> stato Elo ->
+    predizioni forward, non solo nello scoring.
+
+    Dedup robusto su ``(date, coppia-squadre NON orientata)``: la fonte martj42 ha
+    **precedenza**, quindi appena pubblica una partita (anche con casa/trasferta
+    invertite) la riga manuale viene scartata -> supplemento auto-pulente. Alle
+    righe senza ``tournament`` viene assegnato ``"FIFA World Cup"`` cosi' l'Elo
+    applica il k-factor corretto.
+    """
+    if not manual_csv.exists():
+        return df
+    manual = pd.read_csv(manual_csv, dtype={"neutral": "string"})
+    if manual.empty:
+        return df
+
+    manual["date"] = pd.to_datetime(manual["date"], errors="raise").astype("datetime64[ns]")
+    manual = manual.dropna(subset=["home_score", "away_score"]).copy()
+    manual["home_score"] = manual["home_score"].astype("int64")
+    manual["away_score"] = manual["away_score"].astype("int64")
+    manual["neutral"] = (
+        manual["neutral"].str.upper().map({"TRUE": True, "FALSE": False}).astype("bool")
+    )
+    if "tournament" not in manual.columns:
+        manual["tournament"] = "FIFA World Cup"
+    for col in df.columns:
+        if col not in manual.columns:
+            manual[col] = pd.NA
+    manual = manual[df.columns]
+
+    # Chiave (data, coppia-squadre NON orientata). Scartiamo SOLO le righe manuali
+    # gia' presenti in martj42 (orientamento incluso) e gli eventuali duplicati
+    # interni del file manuale: il dataframe martj42 non viene mai toccato.
+    def _keys(frame: pd.DataFrame) -> list[str]:
+        return [
+            f"{pd.Timestamp(d).strftime('%Y%m%d')}|" + "|".join(sorted((h, a)))
+            for d, h, a in zip(
+                frame["date"], frame["home_team"], frame["away_team"], strict=True
+            )
+        ]
+
+    existing = set(_keys(df))
+    manual = manual.assign(_k=_keys(manual))
+    manual = manual[~manual["_k"].isin(existing)]
+    manual = manual.drop_duplicates(subset="_k", keep="first").drop(columns="_k")
+    if manual.empty:
+        return df
+
+    combined = (
+        pd.concat([df, manual], ignore_index=True)
+        .sort_values("date", kind="mergesort")
+        .reset_index(drop=True)
+    )
+    log.info("manual_results_injected", added=len(manual), path=str(manual_csv))
+    return combined
+
+
+def build_processed_matches(
+    raw_csv: Path, out_path: Path, manual_csv: Path | None = None
+) -> Path:
     """Pipeline: raw CSV → matches.parquet con Elo pre-match per riga.
 
     - Carica il raw
@@ -86,11 +149,15 @@ def build_processed_matches(raw_csv: Path, out_path: Path) -> Path:
     Args:
         raw_csv: path del CSV scaricato.
         out_path: dove scrivere il parquet.
+        manual_csv: se fornito ed esistente, inietta i risultati inseriti a mano
+            (partite non ancora pubblicate da martj42) via ``append_manual_results``.
 
     Returns:
         out_path.
     """
     df = load_international_results(raw_csv)
+    if manual_csv is not None:
+        df = append_manual_results(df, manual_csv)
     elo = EloSystem()
     df = elo.build_history(df)
     df = add_tier1_features(df)
