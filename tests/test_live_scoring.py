@@ -6,7 +6,10 @@ import math
 import numpy as np
 import pandas as pd
 
-from mondiali.evaluation.live_scoring import score_completed_matches
+from mondiali.evaluation.live_scoring import (
+    merge_actual_results,
+    score_completed_matches,
+)
 
 
 def _pred(team_a, team_b, p_a, p_d, p_b, p_o25, p_btts, group="A", neutral=False):
@@ -62,6 +65,46 @@ def test_skips_matches_without_prediction():
     scored, summary = score_completed_matches(pred, actual)
     assert len(scored) == 0
     assert summary["n_matches"] == 0
+
+
+def test_merge_actual_results_appends_supplement():
+    primary = pd.DataFrame([{
+        "date": "2026-06-11", "home_team": "X", "away_team": "Y",
+        "home_score": 2, "away_score": 0, "neutral": True,
+    }])
+    supplement = pd.DataFrame([{
+        "date": "2026-06-13", "home_team": "P", "away_team": "Q",
+        "home_score": 1, "away_score": 1, "neutral": True,
+    }])
+    merged = merge_actual_results(primary, supplement)
+    assert len(merged) == 2
+    pairs = set(zip(merged["home_team"], merged["away_team"], strict=True))
+    assert pairs == {("X", "Y"), ("P", "Q")}
+
+
+def test_merge_actual_results_primary_wins_on_conflict():
+    # Stessa coppia (P,Q): la sorgente primaria (martj42) vince sul manuale.
+    primary = pd.DataFrame([{
+        "date": "2026-06-13", "home_team": "P", "away_team": "Q",
+        "home_score": 1, "away_score": 1, "neutral": True,
+    }])
+    supplement = pd.DataFrame([{
+        "date": "2026-06-13", "home_team": "P", "away_team": "Q",
+        "home_score": 9, "away_score": 9, "neutral": True,  # valore errato
+    }])
+    merged = merge_actual_results(primary, supplement)
+    assert len(merged) == 1
+    assert int(merged.iloc[0]["home_score"]) == 1
+    assert int(merged.iloc[0]["away_score"]) == 1
+
+
+def test_merge_actual_results_none_supplement_is_noop():
+    primary = pd.DataFrame([{
+        "date": "2026-06-11", "home_team": "X", "away_team": "Y",
+        "home_score": 2, "away_score": 0, "neutral": True,
+    }])
+    assert len(merge_actual_results(primary, None)) == 1
+    assert len(merge_actual_results(primary, pd.DataFrame())) == 1
 
 
 def test_summary_aggregates_and_compares_baseline():

@@ -147,3 +147,24 @@ def load_actual_wc2026_results(results_csv, since: str = "2026-06-01") -> pd.Dat
     out["home_score"] = out["home_score"].astype(int)
     out["away_score"] = out["away_score"].astype(int)
     return out
+
+
+def merge_actual_results(
+    primary: pd.DataFrame,
+    supplement: pd.DataFrame | None,
+) -> pd.DataFrame:
+    """Unisce una sorgente supplementare ai risultati primari.
+
+    Serve per le partite gia' giocate ma non ancora pubblicate dal dataset
+    community (martj42), inserite a mano in ``data/wc2026/manual_results.csv``.
+    La sorgente ``primary`` (martj42) ha **precedenza**: appena pubblica una
+    partita, l'eventuale riga manuale per la stessa coppia (home, away) viene
+    scartata automaticamente, cosi' il supplemento e' auto-pulente.
+    """
+    if supplement is None or supplement.empty:
+        return primary.reset_index(drop=True)
+    combined = pd.concat([primary, supplement], ignore_index=True)
+    combined = combined.drop_duplicates(
+        subset=["home_team", "away_team"], keep="first"
+    )
+    return combined.reset_index(drop=True)

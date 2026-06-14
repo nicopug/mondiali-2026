@@ -22,12 +22,14 @@ import pandas as pd
 
 from mondiali.evaluation.live_scoring import (
     load_actual_wc2026_results,
+    merge_actual_results,
     score_completed_matches,
 )
 
 REPO = Path(__file__).resolve().parent.parent
 PRED_CSV = REPO / "reports" / "wc2026_groups_predictions.csv"
 RESULTS_CSV = REPO / "data" / "raw" / "results.csv"
+MANUAL_CSV = REPO / "data" / "wc2026" / "manual_results.csv"
 OUT_CSV = REPO / "reports" / "wc2026_scored_matches.csv"
 OUT_MD = REPO / "reports" / "wc2026_live_scoring.md"
 
@@ -39,6 +41,14 @@ def _fmt(v: float) -> str:
 def main() -> None:
     preds = pd.read_csv(PRED_CSV)
     actuals = load_actual_wc2026_results(RESULTS_CSV)
+    # Supplemento manuale per partite gia' giocate ma non ancora pubblicate da
+    # martj42 (auto-pulente: martj42 ha precedenza quando le pubblica).
+    n_manual = 0
+    if MANUAL_CSV.exists():
+        manual = pd.read_csv(MANUAL_CSV)
+        before = len(actuals)
+        actuals = merge_actual_results(actuals, manual)
+        n_manual = len(actuals) - before
     scored, s = score_completed_matches(preds, actuals)
 
     if s["n_matches"] == 0:
@@ -53,6 +63,11 @@ def main() -> None:
     lines.append(f"**Generato:** {date.today().isoformat()}  ")
     lines.append("**Predizioni:** `reports/wc2026_groups_predictions.csv` (congelate 2026-05-16)  ")
     lines.append("**Risultati:** `data/raw/results.csv` (martj42)  ")
+    if n_manual:
+        lines.append(
+            f"**Supplemento manuale:** `data/wc2026/manual_results.csv` "
+            f"({n_manual} partite non ancora su martj42)  "
+        )
     lines.append(f"**Partite valutate:** {s['n_matches']}")
     lines.append("")
     lines.append("> Leak-free: si valutano solo le probabilita' ex-ante, mai ri-predette.")
@@ -98,7 +113,7 @@ def main() -> None:
     lines.append("")
     OUT_MD.write_text("\n".join(lines), encoding="utf-8")
 
-    print(f"Valutate {s['n_matches']} partite.")
+    print(f"Valutate {s['n_matches']} partite (di cui {n_manual} da supplemento manuale).")
     print(f"  1X2 log-loss = {s['log_loss_1x2']:.4f} (baseline {s['baseline_log_loss_1x2']:.4f}, "
           f"edge {s['edge_vs_uniform_1x2']:+.4f})")
     print(f"  O/U 2.5 log-loss = {s['log_loss_ou25']:.4f}")
