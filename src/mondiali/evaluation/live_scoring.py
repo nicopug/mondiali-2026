@@ -11,7 +11,9 @@ Convenzione classi 1X2 (coerente con ``training.evaluate``):
 """
 from __future__ import annotations
 
+import contextlib
 import math
+import unicodedata
 
 import pandas as pd
 
@@ -20,6 +22,24 @@ from mondiali.training.evaluate import brier_score_1x2, log_loss_1x2
 _EPS = 1e-9
 _LN3 = math.log(3.0)
 _LN2 = math.log(2.0)
+
+
+def _norm_name(name: str) -> str:
+    """Chiave di matching robusta a encoding/mojibake e accenti.
+
+    Le predizioni congelate possono contenere nomi a doppio-encoding
+    (es. ``"CuraÃ§ao"``) mentre i risultati reali (martj42) hanno l'UTF-8
+    corretto (es. ``"Curaçao"``). Ripara il mojibake (re-encode latin-1 ->
+    decode utf-8) quando possibile, poi rimuove gli accenti e tiene solo i
+    caratteri alfanumerici ascii minuscoli. Usata SOLO come chiave di
+    aggancio: i nomi visualizzati restano invariati.
+    """
+    s = str(name)
+    with contextlib.suppress(UnicodeEncodeError, UnicodeDecodeError):
+        s = s.encode("latin-1").decode("utf-8")
+    nfkd = unicodedata.normalize("NFKD", s)
+    folded = "".join(c for c in nfkd if not unicodedata.combining(c))
+    return "".join(c.lower() for c in folded if c.isascii() and c.isalnum())
 
 
 def _binary_log_loss(p_event: float, y: int) -> float:
@@ -45,21 +65,23 @@ def score_completed_matches(
         valutata e ``summary`` aggrega le metriche con confronto vs baseline
         uniforme.
     """
-    # Lookup orientato: (team_a, team_b) -> riga predizione.
+    # Lookup orientato su chiave normalizzata (robusta a mojibake/accenti).
     pred_index: dict[tuple[str, str], pd.Series] = {
-        (r["team_a"], r["team_b"]): r for _, r in predictions.iterrows()
+        (_norm_name(r["team_a"]), _norm_name(r["team_b"])): r
+        for _, r in predictions.iterrows()
     }
 
     rows: list[dict] = []
     for _, m in actuals.iterrows():
         home, away = m["home_team"], m["away_team"]
+        key_h, key_a = _norm_name(home), _norm_name(away)
         hs, as_ = int(m["home_score"]), int(m["away_score"])
 
-        if (home, away) in pred_index:
-            pr = pred_index[(home, away)]
+        if (key_h, key_a) in pred_index:
+            pr = pred_index[(key_h, key_a)]
             p_home, p_draw, p_away = pr["p_a_wins"], pr["p_draw"], pr["p_b_wins"]
-        elif (away, home) in pred_index:
-            pr = pred_index[(away, home)]
+        elif (key_a, key_h) in pred_index:
+            pr = pred_index[(key_a, key_h)]
             # fixture invertito: P(home reale) = prob di vittoria di team_b
             p_home, p_draw, p_away = pr["p_b_wins"], pr["p_draw"], pr["p_a_wins"]
         else:

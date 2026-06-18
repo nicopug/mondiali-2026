@@ -56,6 +56,37 @@ def test_handles_reversed_orientation():
     assert math.isclose(row["log_loss_1x2"], -math.log(0.5), rel_tol=1e-9)
 
 
+def test_matches_despite_mojibake_team_name():
+    # Le predizioni congelate hanno un nome a doppio-encoding ("CuraÃ§ao"),
+    # mentre i risultati reali (martj42) hanno l'UTF-8 corretto ("Curaçao").
+    # Il matching deve agganciare comunque la partita.
+    pred = pd.DataFrame([_pred("Germany", "CuraÃ§ao", 0.85, 0.10, 0.05, 0.8, 0.5)])
+    actual = pd.DataFrame([{
+        "date": "2026-06-18", "home_team": "Germany", "away_team": "Curaçao",
+        "home_score": 7, "away_score": 1,
+    }])
+    scored, summary = score_completed_matches(pred, actual)
+    assert summary["n_matches"] == 1
+    row = scored.iloc[0]
+    assert row["actual_1x2"] == "H"
+    assert math.isclose(row["p_actual_1x2"], 0.85, rel_tol=1e-9)
+
+
+def test_matches_mojibake_reversed_orientation():
+    # Stesso mismatch ma con la squadra accentata in casa nel risultato reale.
+    pred = pd.DataFrame([_pred("CuraÃ§ao", "Germany", 0.05, 0.10, 0.85, 0.8, 0.5)])
+    actual = pd.DataFrame([{
+        "date": "2026-06-18", "home_team": "Curaçao", "away_team": "Germany",
+        "home_score": 0, "away_score": 3,
+    }])
+    scored, summary = score_completed_matches(pred, actual)
+    assert summary["n_matches"] == 1
+    row = scored.iloc[0]
+    # Curaçao (casa) perde -> away win -> P = p_b_wins = 0.85
+    assert row["actual_1x2"] == "A"
+    assert math.isclose(row["p_actual_1x2"], 0.85, rel_tol=1e-9)
+
+
 def test_skips_matches_without_prediction():
     pred = pd.DataFrame([_pred("X", "Y", 0.6, 0.25, 0.15, 0.7, 0.6)])
     actual = pd.DataFrame([{
