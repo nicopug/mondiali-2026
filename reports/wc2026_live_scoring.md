@@ -1,9 +1,9 @@
 # WC2026 — Live scoring (ex-ante vs reale)
 
-**Generato:** 2026-06-18  
+**Generato:** 2026-06-21  
 **Predizioni:** `reports/wc2026_groups_predictions.csv` (congelate 2026-05-16)  
 **Risultati:** `data/raw/results.csv` (martj42)  
-**Partite valutate:** 24
+**Partite valutate:** 36
 
 > Leak-free: si valutano solo le probabilita' ex-ante, mai ri-predette.
 
@@ -11,9 +11,9 @@
 
 | Mercato | log-loss modello | log-loss baseline uniforme | edge | Brier |
 |---|---|---|---|---|
-| 1X2 | 1.1630 | 1.0986 | -0.0643 | 0.7100 |
-| Over/Under 2.5 | 0.8810 | 0.6931 | -0.1879 | 0.3260 |
-| BTTS | 0.6118 | 0.6931 | +0.0814 | 0.2104 |
+| 1X2 | 1.1337 | 1.0986 | -0.0351 | 0.6632 |
+| Over/Under 2.5 | 0.8848 | 0.6931 | -0.1917 | 0.3207 |
+| BTTS | 0.6933 | 0.6931 | -0.0001 | 0.2489 |
 
 `edge` positivo = il modello batte la predizione casuale; negativo = peggio del random.
 
@@ -45,5 +45,17 @@
 | 2026-06-17 | Uzbekistan–Colombia | 1-3 | 0.17/0.20/0.63 | A | 0.63 | 0.460 |
 | 2026-06-17 | England–Croatia | 4-2 | 0.53/0.22/0.25 | H | 0.53 | 0.634 |
 | 2026-06-17 | Ghana–Panama | 1-0 | 0.19/0.19/0.62 | H | 0.19 | 1.669 |
+| 2026-06-18 | Czech Republic–South Africa | 1-1 | 0.64/0.19/0.16 | D | 0.19 | 1.640 |
+| 2026-06-18 | Mexico–South Korea | 1-0 | 0.47/0.24/0.29 | H | 0.47 | 0.759 |
+| 2026-06-18 | Switzerland–Bosnia and Herzegovina | 4-1 | 0.67/0.18/0.16 | H | 0.67 | 0.408 |
+| 2026-06-18 | Canada–Qatar | 6-0 | 0.74/0.14/0.12 | H | 0.74 | 0.304 |
+| 2026-06-19 | Scotland–Morocco | 0-1 | 0.26/0.22/0.52 | A | 0.52 | 0.656 |
+| 2026-06-19 | Brazil–Haiti | 3-0 | 0.77/0.13/0.10 | H | 0.77 | 0.262 |
+| 2026-06-19 | United States–Australia | 2-0 | 0.31/0.22/0.47 | H | 0.31 | 1.187 |
+| 2026-06-19 | Turkey–Paraguay | 0-1 | 0.57/0.20/0.22 | A | 0.22 | 1.501 |
+| 2026-06-20 | Germany–Ivory Coast | 2-1 | 0.49/0.22/0.30 | H | 0.49 | 0.722 |
+| 2026-06-20 | Ecuador–Curaçao | 0-0 | 0.98/0.01/0.00 | D | 0.01 | 4.350 |
+| 2026-06-20 | Netherlands–Sweden | 5-1 | 0.59/0.21/0.21 | H | 0.59 | 0.534 |
+| 2026-06-20 | Tunisia–Japan | 0-4 | 0.23/0.21/0.56 | A | 0.56 | 0.581 |
 
-**Hit-rate 1X2** (esito reale sopra 1/3 di probabilita'): 46%
+**Hit-rate 1X2** (esito reale sopra 1/3 di probabilita'): 53%
