@@ -1,61 +1,63 @@
 # WC2026 — Knockout Bracket Monte Carlo (v1_final)
 
-**Generated:** 2026-05-16  
-**Bracket:** 32 teams (top by Elo from group placeholder)  
+**Generated:** 2026-06-28  
+**Bracket:** 32 squadre — tabellone reale (data/wc2026/bracket_r32.json)  
 **Simulations:** 10,000  
+
+> Forward prediction leak-free: lo stato Elo riflette tutti i 72 risultati dei gironi; il modello v1_final (congelato) e' solo *usato*, mai ri-allenato.
 
 ## R32 pairings (positional bracket)
 
-1. Spain vs Czech Republic
-2. Argentina vs Sweden
-3. France vs Ivory Coast
-4. England vs Scotland
-5. Brazil vs Egypt
-6. Portugal vs Uzbekistan
-7. Colombia vs Panama
-8. Netherlands vs Austria
-9. Ecuador vs Canada
-10. Germany vs South Korea
-11. Morocco vs Iran
-12. Japan vs Norway
-13. Croatia vs Australia
-14. Mexico vs Paraguay
-15. Uruguay vs Belgium
-16. Turkey vs Switzerland
+1. Germany vs Paraguay
+2. France vs Sweden
+3. South Africa vs Canada
+4. Netherlands vs Morocco
+5. Portugal vs Croatia
+6. Spain vs Austria
+7. United States vs Bosnia and Herzegovina
+8. Belgium vs Senegal
+9. Brazil vs Japan
+10. Ivory Coast vs Norway
+11. Mexico vs Ecuador
+12. England vs DR Congo
+13. Argentina vs Cape Verde
+14. Australia vs Egypt
+15. Switzerland vs Algeria
+16. Colombia vs Ghana
 
 ## Per-team round reach probabilities
 
 | Team | R16 | QF | SF | Final | Winner |
 |---|---|---|---|---|---|
-| Spain | 85.3% | 49.1% | 29.2% | 20.6% | 15.5% |
-| England | 81.3% | 51.9% | 28.1% | 16.1% | 10.0% |
-| Argentina | 73.1% | 40.9% | 19.5% | 11.9% | 8.8% |
-| France | 79.5% | 40.6% | 19.9% | 11.7% | 7.6% |
-| Brazil | 57.8% | 32.9% | 18.7% | 9.8% | 5.6% |
-| Netherlands | 61.7% | 42.1% | 24.4% | 9.4% | 4.8% |
-| Switzerland | 54.9% | 30.8% | 19.0% | 11.5% | 4.4% |
-| Portugal | 64.2% | 36.2% | 18.4% | 7.5% | 4.2% |
-| Germany | 56.5% | 37.3% | 19.7% | 9.9% | 3.9% |
-| Turkey | 45.1% | 27.6% | 17.6% | 10.1% | 3.9% |
-| Belgium | 59.5% | 24.5% | 15.9% | 9.2% | 3.8% |
-| Mexico | 46.7% | 29.2% | 12.4% | 7.1% | 3.0% |
-| Japan | 50.7% | 32.8% | 18.9% | 8.4% | 3.0% |
-| Ecuador | 52.2% | 23.8% | 12.2% | 5.9% | 2.8% |
-| Uruguay | 40.5% | 17.1% | 10.8% | 6.4% | 2.6% |
-| Colombia | 56.5% | 24.2% | 13.4% | 5.1% | 2.4% |
-| Morocco | 52.4% | 23.4% | 12.8% | 5.6% | 2.1% |
-| Croatia | 50.4% | 22.8% | 9.3% | 5.4% | 1.9% |
-| Norway | 49.3% | 27.3% | 13.9% | 5.2% | 1.9% |
-| Paraguay | 53.3% | 29.9% | 9.2% | 4.6% | 1.4% |
-| Iran | 47.6% | 16.5% | 8.8% | 3.4% | 1.4% |
-| Australia | 49.6% | 18.1% | 5.7% | 2.9% | 1.0% |
-| Austria | 38.3% | 21.5% | 10.3% | 2.7% | 0.9% |
-| South Korea | 43.5% | 22.4% | 7.9% | 2.6% | 0.9% |
-| Canada | 47.8% | 16.6% | 5.8% | 2.0% | 0.8% |
-| Panama | 43.5% | 12.2% | 5.4% | 1.7% | 0.5% |
-| Egypt | 42.2% | 15.9% | 5.3% | 1.6% | 0.5% |
-| Uzbekistan | 35.8% | 15.0% | 4.0% | 1.0% | 0.4% |
-| Sweden | 26.9% | 8.1% | 1.6% | 0.4% | 0.1% |
-| Ivory Coast | 20.5% | 3.5% | 0.6% | 0.1% | 0.0% |
-| Scotland | 18.7% | 4.0% | 0.8% | 0.2% | 0.0% |
-| Czech Republic | 14.7% | 1.9% | 0.3% | 0.1% | 0.0% |
+| Argentina | 88.0% | 69.7% | 51.2% | 32.7% | 21.1% |
+| Spain | 83.5% | 63.1% | 48.0% | 35.5% | 20.4% |
+| England | 82.8% | 48.3% | 30.5% | 15.8% | 9.0% |
+| France | 66.1% | 47.4% | 32.9% | 16.0% | 8.6% |
+| Brazil | 64.1% | 44.5% | 24.9% | 13.6% | 7.4% |
+| Belgium | 65.9% | 48.9% | 22.2% | 12.3% | 5.8% |
+| Colombia | 69.2% | 43.4% | 18.7% | 9.3% | 4.3% |
+| Netherlands | 54.9% | 37.9% | 17.1% | 6.3% | 2.8% |
+| Portugal | 58.2% | 20.1% | 11.6% | 5.9% | 2.5% |
+| Ecuador | 53.2% | 25.0% | 12.4% | 5.3% | 2.1% |
+| Morocco | 45.1% | 30.4% | 13.2% | 5.0% | 2.1% |
+| Germany | 62.2% | 24.0% | 12.8% | 5.1% | 2.1% |
+| Mexico | 46.8% | 22.2% | 11.3% | 5.1% | 2.0% |
+| Switzerland | 57.2% | 28.9% | 10.1% | 4.3% | 1.6% |
+| Japan | 35.9% | 20.2% | 8.2% | 3.5% | 1.1% |
+| Sweden | 33.9% | 17.7% | 9.0% | 3.0% | 1.0% |
+| Croatia | 41.8% | 10.8% | 5.8% | 2.6% | 0.9% |
+| Norway | 58.1% | 20.2% | 6.5% | 2.2% | 0.8% |
+| Egypt | 50.4% | 14.8% | 6.6% | 2.2% | 0.7% |
+| United States | 63.7% | 23.2% | 4.8% | 1.9% | 0.5% |
+| Canada | 64.9% | 24.7% | 8.6% | 2.4% | 0.5% |
+| Ivory Coast | 41.9% | 15.0% | 5.0% | 1.7% | 0.5% |
+| Paraguay | 37.8% | 10.9% | 5.2% | 1.4% | 0.5% |
+| Australia | 49.5% | 11.8% | 5.1% | 1.6% | 0.5% |
+| Algeria | 42.8% | 18.4% | 5.1% | 1.6% | 0.4% |
+| Senegal | 34.1% | 20.6% | 4.1% | 1.5% | 0.4% |
+| Austria | 16.5% | 5.9% | 2.3% | 0.8% | 0.1% |
+| Ghana | 30.8% | 9.3% | 2.4% | 0.6% | 0.1% |
+| DR Congo | 17.2% | 4.5% | 1.2% | 0.2% | 0.1% |
+| Cape Verde | 12.0% | 3.6% | 0.8% | 0.2% | 0.1% |
+| South Africa | 35.1% | 7.1% | 1.3% | 0.2% | 0.0% |
+| Bosnia and Herzegovina | 36.3% | 7.2% | 1.2% | 0.3% | 0.0% |

@@ -104,7 +104,11 @@ def main(bracket_path: Path | None = None) -> None:
             })
     else:
         cfg = json.loads(bracket_path.read_text())
-        bracket = [{"team_a": p[0], "team_b": p[1]} for p in cfg["bracket_r32"]]
+        # bracket_r32 e' una lista di dict con team_a/team_b (gia' risolti).
+        bracket = [
+            {"team_a": p["team_a"], "team_b": p["team_b"]}
+            for p in cfg["bracket_r32"]
+        ]
 
     print(f"Bracket: {len(bracket)} matches in R{len(bracket)*2}")
     print("R32 pairings:")
@@ -130,13 +134,21 @@ def main(bracket_path: Path | None = None) -> None:
         cols = [f"{row[f'p_round_{r}']*100:6.1f}%" for r in range(1, n_rounds + 1)]
         print(f"{row['team']:25s}  " + "  ".join(cols))
 
+    from datetime import date
     md_path = Path("reports/wc2026_knockout_simulation.md")
+    bracket_src = (
+        "tabellone reale (data/wc2026/bracket_r32.json)" if bracket_path
+        else "placeholder top-Elo dai gironi"
+    )
     lines = [
         "# WC2026 — Knockout Bracket Monte Carlo (v1_final)",
         "",
-        f"**Generated:** 2026-05-16  ",
-        f"**Bracket:** 32 teams (top by Elo from group placeholder)  ",
+        f"**Generated:** {date.today().isoformat()}  ",
+        f"**Bracket:** 32 squadre — {bracket_src}  ",
         f"**Simulations:** 10,000  ",
+        "",
+        "> Forward prediction leak-free: lo stato Elo riflette tutti i 72 risultati "
+        "dei gironi; il modello v1_final (congelato) e' solo *usato*, mai ri-allenato.",
         "",
         "## R32 pairings (positional bracket)",
         "",
@@ -159,4 +171,6 @@ def main(bracket_path: Path | None = None) -> None:
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    arg = Path(sys.argv[1]) if len(sys.argv) > 1 else None
+    main(arg)
