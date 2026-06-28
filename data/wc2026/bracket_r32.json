@@ -1,118 +1,118 @@
 {
-  "_README": "Tabellone ufficiale WC2026 in ordine a foglie. Compila team_a/team_b coi nomi REALI delle qualificate (come appaiono in data/state/elo_state.parquet). Slot: W-X=vincitrice girone X, RU-X=seconda, 3-XYZ=terza da uno dei gironi elencati. L'assegnazione delle 8 terze segue l'Annex C FIFA in base a quali terze passano.",
-  "knockout_date": "2026-07-01",
+  "_README": "Tabellone ufficiale WC2026 in ordine a foglie. team_a/team_b compilati coi nomi REALI delle qualificate (verificati 2026-06-28 contro lo scoring, le classifiche girone e l'immagine ufficiale world_cup_knockouts.jpg). Slot: W-X=vincitrice girone X, RU-X=seconda, 3-XYZ=terza da uno dei gironi elencati (Annex C FIFA). Le 8 migliori terze qualificate vengono dai gironi B,D,E,F,I,J,K,L.",
+  "knockout_date": "2026-06-28",
   "bracket_r32": [
     {
       "match": 74,
       "slot_a": "W-E",
       "slot_b": "3-ABCDF",
-      "team_a": "",
-      "team_b": ""
+      "team_a": "Germany",
+      "team_b": "Paraguay"
     },
     {
       "match": 77,
       "slot_a": "W-I",
       "slot_b": "3-CDFGH",
-      "team_a": "",
-      "team_b": ""
+      "team_a": "France",
+      "team_b": "Sweden"
     },
     {
       "match": 73,
       "slot_a": "RU-A",
       "slot_b": "RU-B",
-      "team_a": "",
-      "team_b": ""
+      "team_a": "South Africa",
+      "team_b": "Canada"
     },
     {
       "match": 75,
       "slot_a": "W-F",
       "slot_b": "RU-C",
-      "team_a": "",
-      "team_b": ""
+      "team_a": "Netherlands",
+      "team_b": "Morocco"
     },
     {
       "match": 83,
       "slot_a": "RU-K",
       "slot_b": "RU-L",
-      "team_a": "",
-      "team_b": ""
+      "team_a": "Portugal",
+      "team_b": "Croatia"
     },
     {
       "match": 84,
       "slot_a": "W-H",
       "slot_b": "RU-J",
-      "team_a": "",
-      "team_b": ""
+      "team_a": "Spain",
+      "team_b": "Austria"
     },
     {
       "match": 81,
       "slot_a": "W-D",
       "slot_b": "3-BEFIJ",
-      "team_a": "",
-      "team_b": ""
+      "team_a": "United States",
+      "team_b": "Bosnia and Herzegovina"
     },
     {
       "match": 82,
       "slot_a": "W-G",
       "slot_b": "3-AEHIJ",
-      "team_a": "",
-      "team_b": ""
+      "team_a": "Belgium",
+      "team_b": "Senegal"
     },
     {
       "match": 76,
       "slot_a": "W-C",
       "slot_b": "RU-F",
-      "team_a": "",
-      "team_b": ""
+      "team_a": "Brazil",
+      "team_b": "Japan"
     },
     {
       "match": 78,
       "slot_a": "RU-E",
       "slot_b": "RU-I",
-      "team_a": "",
-      "team_b": ""
+      "team_a": "Ivory Coast",
+      "team_b": "Norway"
     },
     {
       "match": 79,
       "slot_a": "W-A",
       "slot_b": "3-CEFHI",
-      "team_a": "",
-      "team_b": ""
+      "team_a": "Mexico",
+      "team_b": "Ecuador"
     },
     {
       "match": 80,
       "slot_a": "W-L",
       "slot_b": "3-EHIJK",
-      "team_a": "",
-      "team_b": ""
+      "team_a": "England",
+      "team_b": "DR Congo"
     },
     {
       "match": 86,
       "slot_a": "W-J",
       "slot_b": "RU-H",
-      "team_a": "",
-      "team_b": ""
+      "team_a": "Argentina",
+      "team_b": "Cape Verde"
     },
     {
       "match": 88,
       "slot_a": "RU-D",
       "slot_b": "RU-G",
-      "team_a": "",
-      "team_b": ""
+      "team_a": "Australia",
+      "team_b": "Egypt"
     },
     {
       "match": 85,
       "slot_a": "W-B",
       "slot_b": "3-EFGIJ",
-      "team_a": "",
-      "team_b": ""
+      "team_a": "Switzerland",
+      "team_b": "Algeria"
     },
     {
       "match": 87,
       "slot_a": "W-K",
       "slot_b": "3-DEIJL",
-      "team_a": "",
-      "team_b": ""
+      "team_a": "Colombia",
+      "team_b": "Ghana"
     }
   ]
 }

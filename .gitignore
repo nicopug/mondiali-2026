@@ -49,5 +49,9 @@ reports/*
 # OS
 Thumbs.db
 
+# Reference images dropped in root (not versioned)
+/world_cup_knockouts.jpg
+*.jpeg
+
 # Claude Code local state (non condiviso)
 .claude/
